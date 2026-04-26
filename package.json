@@ -3,24 +3,33 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "concurrently -k -n NEXT,POLLER -c cyan,magenta \"npm:dev:next\" \"npm:dev:poller\"",
+    "dev:next": "next dev",
+    "dev:poller": "dotenv -e .env.local -- node scripts/local-etl-poller.mjs",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "db:generate": "prisma generate",
+    "db:push": "dotenv -e .env.local -- prisma db push",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "next": "14.2.33",
     "react": "^18",
-    "react-dom": "^18",
-    "next": "14.2.33"
+    "react-dom": "^18"
   },
   "devDependencies": {
-    "typescript": "^5",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "postcss": "^8",
-    "tailwindcss": "^3.4.1",
+    "concurrently": "^9.2.1",
+    "dotenv-cli": "^11.0.0",
     "eslint": "^8",
-    "eslint-config-next": "14.2.33"
+    "eslint-config-next": "14.2.33",
+    "postcss": "^8",
+    "prisma": "^5.22.0",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5"
   }
 }

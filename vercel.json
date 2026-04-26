@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/run-etl",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/full-sync",
+      "schedule": "0 4 * * *"
+    }
+  ]
+}

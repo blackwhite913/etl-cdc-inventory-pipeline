@@ -1,0 +1,78 @@
+// Prisma schema for the stock ETL pipeline.
+//
+// Models:
+//   - StockSnapshot : current-state table keyed by (productCode, warehouseCode).
+//                     Source of truth for the CDC cursor (MAX(lastModified)).
+//   - EtlRun        : observability-only run log. Never feeds CDC decisions.
+//   - EtlLock       : singleton lock row preventing concurrent ETL runs.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model StockSnapshot {
+  productCode       String
+  warehouseCode     String
+
+  description       String?
+  productGroup      String?
+
+  qtyOnHand         Int
+  allocatedQty      Int
+  availableQty      Int
+  onPurchase        Int
+
+  avgCost           Float?
+  totalCost         Float?
+
+  daysSinceLastSale Int?
+
+  lastModified      DateTime?
+  snapshotAt        DateTime  @default(now())
+
+  @@id([productCode, warehouseCode])
+  // productCode is already the left-most key of the composite PK index.
+  // warehouseCode standalone index supports warehouse-scoped queries.
+  @@index([productCode])
+  @@index([warehouseCode])
+  @@index([lastModified])
+}
+
+model EtlRun {
+  id                     String    @id @default(cuid())
+  startedAt              DateTime  @default(now())
+  finishedAt             DateTime?
+
+  mode                   String
+  status                 String
+
+  recordsProcessed       Int       @default(0)
+  inserted               Int       @default(0)
+  updated                Int       @default(0)
+  partialFailures        Int       @default(0)
+
+  fetchTimeMs            Int?
+  loadTimeMs             Int?
+  totalTimeMs            Int?
+
+  cdcCursorUsed          DateTime?
+  latestLastModifiedSeen DateTime?
+
+  errorMessage           String?
+
+  @@index([startedAt])
+  @@index([status])
+}
+
+model EtlLock {
+  // Single-row sentinel; id is always "singleton".
+  id         String   @id @default("singleton")
+  holder     String
+  acquiredAt DateTime @default(now())
+  expiresAt  DateTime
+}
