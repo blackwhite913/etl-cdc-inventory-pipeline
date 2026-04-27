@@ -8,28 +8,30 @@
     "dev:poller": "dotenv -e .env.local -- node scripts/local-etl-poller.mjs",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "db:generate": "prisma generate",
     "db:push": "dotenv -e .env.local -- prisma db push",
+    "etl:run": "dotenv -e .env.local -- tsx scripts/run-etl.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
-    "next": "14.2.33",
-    "react": "^18",
-    "react-dom": "^18"
+    "next": "^16.2.4",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
   },
   "devDependencies": {
     "@types/node": "^20",
-    "@types/react": "^18",
-    "@types/react-dom": "^18",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "concurrently": "^9.2.1",
     "dotenv-cli": "^11.0.0",
-    "eslint": "^8",
-    "eslint-config-next": "14.2.33",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.2.4",
     "postcss": "^8",
     "prisma": "^5.22.0",
     "tailwindcss": "^3.4.1",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }

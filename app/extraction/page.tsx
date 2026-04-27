@@ -172,9 +172,14 @@ export default function ExtractionPage() {
   }, []);
 
   useEffect(() => {
-    void pollEtlStatus();
+    const initial = setTimeout(() => {
+      void pollEtlStatus();
+    }, 0);
     const id = setInterval(() => void pollEtlStatus(), ETL_STATUS_POLL_MS);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(id);
+    };
   }, [pollEtlStatus]);
 
   useEffect(() => {
