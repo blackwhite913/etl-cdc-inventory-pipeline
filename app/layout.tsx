@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+
+import { Sidebar } from "@/app/components/Sidebar";
 import "./globals.css";
 
 const inter = Inter({
@@ -13,8 +15,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Inventory ETL — Unleashed + Postgres",
-  description: "Real-time inventory ETL and CDC pipeline powered by Unleashed API and Neon Postgres.",
+  title: "ETL — Unleashed Data Warehouse",
+  description: "Production ETL data warehouse for Unleashed and downstream systems.",
 };
 
 export default function RootLayout({
@@ -25,7 +27,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.variable} ${jetbrainsMono.variable} antialiased`}>
-        {children}
+        <div className="flex min-h-screen bg-[#0B0F14]">
+          <Sidebar />
+          <div className="min-w-0 flex-1">{children}</div>
+        </div>
       </body>
     </html>
   );

@@ -12,21 +12,46 @@ type ColumnRow = {
 };
 
 /**
- * Returns the column schema for the StockSnapshot table only.
- * Intentionally scoped to prevent full database schema disclosure.
+ * Returns the column schema for known ETL tables only.
+ * Pass ?tables=bom or ?tables=shopify to inspect those datasets, default is stock snapshot.
  */
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const rows = await prisma.$queryRaw<ColumnRow[]>`
-      SELECT
-        table_name,
-        column_name,
-        data_type
-      FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = 'StockSnapshot'
-      ORDER BY ordinal_position
-    `;
+    const { searchParams } = new URL(request.url);
+    const tables = (searchParams.get("tables") ?? "stock").toLowerCase();
+    const rows =
+      tables === "bom"
+        ? await prisma.$queryRaw<ColumnRow[]>`
+            SELECT
+              table_name,
+              column_name,
+              data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name IN ('BomHeader', 'BomLine', 'EtlMetadata', 'DatasetStatus')
+            ORDER BY table_name, ordinal_position
+          `
+        : tables === "shopify"
+          ? await prisma.$queryRaw<ColumnRow[]>`
+              SELECT
+                table_name,
+                column_name,
+                data_type
+              FROM information_schema.columns
+              WHERE table_schema = 'public'
+                AND table_name IN ('ShopifyVariant', 'EtlMetadata', 'DatasetStatus')
+              ORDER BY table_name, ordinal_position
+            `
+        : await prisma.$queryRaw<ColumnRow[]>`
+            SELECT
+              table_name,
+              column_name,
+              data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'StockSnapshot'
+            ORDER BY ordinal_position
+          `;
     return NextResponse.json({ columns: rows });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load schema";

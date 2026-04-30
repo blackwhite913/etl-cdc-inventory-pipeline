@@ -13,6 +13,8 @@
     "db:push": "dotenv -e .env.local -- prisma db push",
     "etl:run": "dotenv -e .env.local -- tsx scripts/run-etl.ts",
     "etl:run:railway": "node --import tsx scripts/run-etl.js",
+    "sync:bom": "tsx jobs/sync-bom.ts",
+    "sync:shopify": "tsx jobs/sync-shopify.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

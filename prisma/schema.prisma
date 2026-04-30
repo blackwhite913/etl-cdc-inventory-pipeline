@@ -76,3 +76,66 @@ model EtlLock {
   acquiredAt DateTime @default(now())
   expiresAt  DateTime
 }
+
+model BomHeader {
+  billNumber           String   @id
+  productCode          String
+  productDescription   String?
+  defaultPurchasePrice Float?
+  defaultSellPrice     Float?
+  totalCost            Float?
+  lastModifiedOn       DateTime?
+  createdOn            DateTime?
+
+  lines BomLine[]
+
+  @@index([productCode])
+  @@index([lastModifiedOn])
+}
+
+model BomLine {
+  id                   String   @id @default(cuid())
+  billNumber           String
+  lineNumber           Int
+  componentCode        String
+  componentDescription String?
+  quantity             Float?
+  unitCost             Float?
+  lastModifiedOn       DateTime?
+
+  header BomHeader @relation(fields: [billNumber], references: [billNumber], onDelete: Cascade)
+
+  @@index([billNumber])
+  @@index([componentCode])
+}
+
+model ShopifyVariant {
+  id                String   @id
+  productId         String
+  sku               String?
+  variantTitle      String?
+  productTitle      String?
+  vendor            String?
+  productType       String?
+  tags              String[]
+  price             String?
+  inventoryQuantity Int?
+  status            String?
+  updatedAt         DateTime?
+  syncedAt          DateTime @default(now())
+
+  @@index([sku])
+  @@index([productId])
+  @@index([updatedAt])
+}
+
+model EtlMetadata {
+  jobName   String   @id
+  lastRunAt DateTime?
+}
+
+model DatasetStatus {
+  datasetName   String   @id
+  lastUpdatedAt DateTime?
+  rowCount      Int      @default(0)
+}

@@ -115,12 +115,15 @@ export async function extractAllStock(options: ExtractOptions = {}): Promise<Ext
 
   const warehouseTotalPages = new Map<string, number>();
   const firstPageSuccesses: PageSuccess[] = [];
+  const firstPageFailures: FailedPage[] = [];
 
   for (const result of firstPagesResults) {
     if (!result.ok) {
       partialFailures += 1;
       const errorMessage = result.error instanceof Error ? result.error.message : String(result.error);
-      failedPages.push({ warehouseCode: result.warehouseCode, page: 1, error: errorMessage });
+      const failedPage = { warehouseCode: result.warehouseCode, page: 1, error: errorMessage };
+      failedPages.push(failedPage);
+      firstPageFailures.push(failedPage);
       console.error(
         `[extract] first-page failed warehouse=${result.warehouseCode} error=${errorMessage}`,
       );
@@ -134,6 +137,12 @@ export async function extractAllStock(options: ExtractOptions = {}): Promise<Ext
     warehouseTotalPages.set(
       result.warehouseCode,
       Math.max(result.response.Pagination?.NumberOfPages ?? 1, 1),
+    );
+  }
+
+  if (firstPageFailures.length > 0) {
+    throw new Error(
+      `Extraction aborted because page 1 failed for one or more warehouses: ${JSON.stringify(firstPageFailures)}`,
     );
   }
 
