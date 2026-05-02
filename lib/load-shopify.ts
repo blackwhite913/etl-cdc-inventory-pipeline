@@ -108,27 +108,29 @@ export async function loadShopifyBatch(products: ShopifyProductRaw[]): Promise<S
     where: { id: { in: ids } },
     select: { id: true },
   });
+
   const existingSet = new Set(existing.map((row) => row.id));
 
-  for (const batch of chunk(normalized, SHOPIFY_TRANSACTION_BATCH)) {
-    await prisma.$transaction(async (tx) => {
-      for (const row of batch) {
-        await tx.shopifyVariant.upsert({
-          where: { id: row.id },
-          create: row,
-          update: row,
-        });
-      }
+  let processed = 0;
+
+  // ✅ FIX: NO TRANSACTION — simple, stable upserts
+  for (const row of normalized) {
+    await prisma.shopifyVariant.upsert({
+      where: { id: row.id },
+      create: row,
+      update: row,
     });
+    processed += 1;
   }
 
   const inserted = normalized.filter((row) => !existingSet.has(row.id)).length;
+
   return {
     productsProcessed: products.length,
     variantsSeen,
-    processed: normalized.length,
+    processed,
     inserted,
-    updated: normalized.length - inserted,
+    updated: processed - inserted,
     fallbackSkusApplied,
     skippedNullSkus: 0,
     durationMs: Date.now() - t0,
