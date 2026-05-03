@@ -44,6 +44,42 @@ type ShopifyProductsConnection = {
   nodes: ShopifyProductNode[];
 };
 
+type ShopifyMoneyAmount = {
+  amount: string;
+};
+
+type ShopifyMoneySet = {
+  shopMoney: ShopifyMoneyAmount | null;
+};
+
+type ShopifyOrderLineItemNode = {
+  id: string;
+  sku: string | null;
+  title: string | null;
+  quantity: number | null;
+  originalUnitPriceSet: ShopifyMoneySet | null;
+};
+
+type ShopifyOrderLineItemsConnection = {
+  pageInfo: ShopifyPageInfo;
+  nodes: ShopifyOrderLineItemNode[];
+};
+
+type ShopifyOrderNode = {
+  id: string;
+  orderNumber: number | null;
+  createdAt: string | null;
+  subtotalPriceSet: ShopifyMoneySet | null;
+  displayFinancialStatus: string | null;
+  displayFulfillmentStatus: string | null;
+  lineItems: ShopifyOrderLineItemsConnection;
+};
+
+type ShopifyOrdersConnection = {
+  pageInfo: ShopifyPageInfo;
+  nodes: ShopifyOrderNode[];
+};
+
 type ShopifyGraphqlData = {
   products: ShopifyProductsConnection;
 };
@@ -51,6 +87,16 @@ type ShopifyGraphqlData = {
 type ShopifyProductVariantsData = {
   product: {
     variants: ShopifyVariantsConnection;
+  } | null;
+};
+
+type ShopifyOrdersGraphqlData = {
+  orders: ShopifyOrdersConnection;
+};
+
+type ShopifyOrderLineItemsData = {
+  order: {
+    lineItems: ShopifyOrderLineItemsConnection;
   } | null;
 };
 
@@ -84,6 +130,47 @@ export type FetchShopifyVariantsPageOptions = {
 export type ShopifyVariantsPage = {
   pageInfo: ShopifyPageInfo;
   variants: ShopifyVariantNode[];
+};
+
+export type FetchShopifyOrdersPageOptions = {
+  cursor?: string | null;
+  query: string;
+};
+
+export type ShopifyOrderLineItem = {
+  id: string;
+  sku: string | null;
+  title: string | null;
+  quantity: number | null;
+  price: string | null;
+};
+
+export type ShopifyOrder = {
+  id: string;
+  orderNumber: string | null;
+  createdAt: string | null;
+  subtotalPrice: string | null;
+  financialStatus: string | null;
+  fulfillmentStatus: string | null;
+  lineItems: {
+    pageInfo: ShopifyPageInfo;
+    nodes: ShopifyOrderLineItem[];
+  };
+};
+
+export type ShopifyOrdersPage = {
+  pageInfo: ShopifyPageInfo;
+  orders: ShopifyOrder[];
+};
+
+export type FetchShopifyOrderLineItemsPageOptions = {
+  orderId: string;
+  cursor?: string | null;
+};
+
+export type ShopifyOrderLineItemsPage = {
+  pageInfo: ShopifyPageInfo;
+  items: ShopifyOrderLineItem[];
 };
 
 function parseNonNegativeIntEnv(name: string, defaultValue: number): number {
@@ -189,6 +276,99 @@ function buildVariantsQuery(): string {
       }
     }
   `;
+}
+
+function buildOrdersQuery(): string {
+  return `
+    query FetchOrders($cursor: String, $query: String!) {
+      orders(first: 100, after: $cursor, query: $query) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          orderNumber
+          createdAt
+          subtotalPriceSet {
+            shopMoney {
+              amount
+            }
+          }
+          displayFinancialStatus
+          displayFulfillmentStatus
+          lineItems(first: 250) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              id
+              sku
+              title
+              quantity
+              originalUnitPriceSet {
+                shopMoney {
+                  amount
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+}
+
+function buildOrderLineItemsQuery(): string {
+  return `
+    query FetchOrderLineItems($orderId: ID!, $cursor: String) {
+      order(id: $orderId) {
+        lineItems(first: 250, after: $cursor) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            id
+            sku
+            title
+            quantity
+            originalUnitPriceSet {
+              shopMoney {
+                amount
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+}
+
+function toShopifyOrderLineItem(node: ShopifyOrderLineItemNode): ShopifyOrderLineItem {
+  return {
+    id: node.id,
+    sku: node.sku,
+    title: node.title,
+    quantity: node.quantity,
+    price: node.originalUnitPriceSet?.shopMoney?.amount ?? null,
+  };
+}
+
+function toShopifyOrder(node: ShopifyOrderNode): ShopifyOrder {
+  return {
+    id: node.id,
+    orderNumber: node.orderNumber === null ? null : String(node.orderNumber),
+    createdAt: node.createdAt,
+    subtotalPrice: node.subtotalPriceSet?.shopMoney?.amount ?? null,
+    financialStatus: node.displayFinancialStatus,
+    fulfillmentStatus: node.displayFulfillmentStatus,
+    lineItems: {
+      pageInfo: node.lineItems.pageInfo,
+      nodes: (node.lineItems.nodes ?? []).map(toShopifyOrderLineItem),
+    },
+  };
 }
 
 async function postShopifyGraphql<TData>(
@@ -310,5 +490,49 @@ export async function fetchShopifyVariantsPage(
   return {
     pageInfo: data.product.variants.pageInfo,
     variants: data.product.variants.nodes ?? [],
+  };
+}
+
+export async function fetchShopifyOrdersPage(
+  options: FetchShopifyOrdersPageOptions,
+): Promise<ShopifyOrdersPage> {
+  const data = await postShopifyGraphql<ShopifyOrdersGraphqlData>(
+    buildOrdersQuery(),
+    {
+      cursor: options.cursor ?? null,
+      query: options.query,
+    },
+    "orders page",
+  );
+
+  if (!data.orders) {
+    throw new Error("Shopify response missing orders payload");
+  }
+
+  return {
+    pageInfo: data.orders.pageInfo,
+    orders: (data.orders.nodes ?? []).map(toShopifyOrder),
+  };
+}
+
+export async function fetchShopifyOrderLineItemsPage(
+  options: FetchShopifyOrderLineItemsPageOptions,
+): Promise<ShopifyOrderLineItemsPage> {
+  const data = await postShopifyGraphql<ShopifyOrderLineItemsData>(
+    buildOrderLineItemsQuery(),
+    {
+      orderId: options.orderId,
+      cursor: options.cursor ?? null,
+    },
+    "order line items page",
+  );
+
+  if (!data.order?.lineItems) {
+    throw new Error(`Shopify response missing line items for order ${options.orderId}`);
+  }
+
+  return {
+    pageInfo: data.order.lineItems.pageInfo,
+    items: (data.order.lineItems.nodes ?? []).map(toShopifyOrderLineItem),
   };
 }

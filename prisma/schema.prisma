@@ -127,6 +127,35 @@ model ShopifyVariant {
   @@index([updatedAt])
 }
 
+model ShopifyOrder {
+  id                String   @id
+  orderNumber       String
+  createdAt         DateTime
+  subtotalPrice     Decimal?
+  financialStatus   String
+  fulfillmentStatus String?
+  syncedAt          DateTime @default(now())
+
+  lineItems ShopifyOrderItem[]
+
+  @@index([createdAt])
+  @@index([financialStatus])
+}
+
+model ShopifyOrderItem {
+  id       String  @id
+  orderId  String
+  sku      String
+  title    String
+  quantity Int
+  price    Decimal?
+
+  order ShopifyOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([sku])
+}
+
 model EtlMetadata {
   jobName   String   @id
   lastRunAt DateTime?

@@ -42,6 +42,17 @@ export async function GET(request: Request) {
                 AND table_name IN ('ShopifyVariant', 'EtlMetadata', 'DatasetStatus')
               ORDER BY table_name, ordinal_position
             `
+          : tables === "shopify_orders"
+            ? await prisma.$queryRaw<ColumnRow[]>`
+                SELECT
+                  table_name,
+                  column_name,
+                  data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name IN ('ShopifyOrder', 'ShopifyOrderItem', 'EtlMetadata', 'DatasetStatus')
+                ORDER BY table_name, ordinal_position
+              `
         : await prisma.$queryRaw<ColumnRow[]>`
             SELECT
               table_name,

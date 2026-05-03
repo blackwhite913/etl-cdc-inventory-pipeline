@@ -1,12 +1,15 @@
 import type { Prisma } from "@prisma/client";
 
 import { extractAllShopify } from "@/lib/extract-shopify";
+import { extractAllShopifyOrders } from "@/lib/extract-shopify-orders";
 import { loadShopifyBatch } from "@/lib/load-shopify";
+import { loadShopifyOrdersBatch } from "@/lib/load-shopify-orders";
 import { log } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 
 const JOB_NAME = "shopify_etl";
 const DATASET_NAME = "shopify";
+const ORDERS_DATASET_NAME = "shopify_orders";
 
 export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 200;
@@ -37,6 +40,8 @@ export type ShopifyEtlSummary = {
   variantsExcludedByActiveFilter: number;
   statusBreakdown: Record<string, number>;
   dbRowCount: number;
+  ordersProcessed: number;
+  itemsProcessed: number;
   errorMessage?: string;
 };
 
@@ -60,6 +65,25 @@ export type ShopifyPaginatedResult = {
   page: number;
   pageSize: number;
   items: ShopifyListItem[];
+};
+
+export type ShopifyOrderListItem = {
+  id: string;
+  order_number: string;
+  created_at: string;
+  sku: string;
+  title: string;
+  quantity: number;
+  price: string;
+  subtotal: string;
+  fulfillment_status: string;
+};
+
+export type ShopifyOrdersPaginatedResult = {
+  total: number;
+  page: number;
+  pageSize: number;
+  items: ShopifyOrderListItem[];
 };
 
 export type ShopifyStatusResult = {
@@ -138,6 +162,68 @@ export async function getShopifyPaginated(
     inventory_quantity: row.inventoryQuantity ?? 0,
     status: row.status ?? "",
     updated_at: row.updatedAt?.toISOString() ?? "",
+  }));
+
+  return { total, page, pageSize, items };
+}
+
+export async function getShopifyOrdersPaginated(
+  params: ShopifyPaginationParams,
+): Promise<ShopifyOrdersPaginatedResult> {
+  const page = Math.max(1, params.page);
+  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, params.pageSize));
+  const skip = (page - 1) * pageSize;
+  const search = (params.search ?? "").trim();
+
+  const where: Prisma.ShopifyOrderItemWhereInput | undefined =
+    search.length > 0
+      ? {
+          OR: [
+            { sku: { contains: search, mode: "insensitive" } },
+            { title: { contains: search, mode: "insensitive" } },
+            {
+              order: {
+                orderNumber: { contains: search, mode: "insensitive" },
+              },
+            },
+          ],
+        }
+      : undefined;
+
+  const [total, rows] = await Promise.all([
+    prisma.shopifyOrderItem.count({ where }),
+    prisma.shopifyOrderItem.findMany({
+      where,
+      include: {
+        order: {
+          select: {
+            orderNumber: true,
+            createdAt: true,
+            subtotalPrice: true,
+            fulfillmentStatus: true,
+          },
+        },
+      },
+      orderBy: [
+        { order: { createdAt: "desc" } },
+        { order: { orderNumber: "desc" } },
+        { id: "asc" },
+      ],
+      skip,
+      take: pageSize,
+    }),
+  ]);
+
+  const items = rows.map((row) => ({
+    id: row.id,
+    order_number: row.order.orderNumber,
+    created_at: row.order.createdAt.toISOString(),
+    sku: row.sku,
+    title: row.title,
+    quantity: row.quantity,
+    price: row.price?.toString() ?? "",
+    subtotal: row.order.subtotalPrice?.toString() ?? "",
+    fulfillment_status: row.order.fulfillmentStatus ?? "",
   }));
 
   return { total, page, pageSize, items };
@@ -235,6 +321,8 @@ export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise
   let variantsExcludedByActiveFilter = 0;
   let statusBreakdown: Record<string, number> = {};
   let dbRowCount = 0;
+  let ordersProcessed = 0;
+  let itemsProcessed = 0;
 
   try {
     const [existingCount, metadata] = await Promise.all([
@@ -264,10 +352,12 @@ export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise
     runId = run.id;
 
     const fetchStart = Date.now();
+    let productLoadTimeMs = 0;
     const { meta } = await extractAllShopify({
       updatedAtGte: cdcCursorUsed ?? undefined,
       onBatch: async (products) => {
         const result = await loadShopifyBatch(products);
+        productLoadTimeMs += result.durationMs;
         loadTimeMs += result.durationMs;
         recordsProcessed += result.processed;
         inserted += result.inserted;
@@ -283,7 +373,7 @@ export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise
         }
       },
     });
-    fetchTimeMs = Date.now() - fetchStart - loadTimeMs;
+    fetchTimeMs += Date.now() - fetchStart - productLoadTimeMs;
 
     productsFetched = meta.totalProductsFetched;
     variantsStored = recordsProcessed;
@@ -291,6 +381,19 @@ export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise
     apiVariantsFetched = meta.totalVariantsSeen;
     variantsExcludedByActiveFilter = Math.max(0, meta.totalVariantsSeen - meta.totalVariantsIfActiveOnly);
     statusBreakdown = meta.statusBreakdown;
+
+    const ordersFetchStart = Date.now();
+    let ordersLoadTimeMs = 0;
+    await extractAllShopifyOrders({
+      onBatch: async (orders) => {
+        const result = await loadShopifyOrdersBatch(orders);
+        ordersLoadTimeMs += result.durationMs;
+        loadTimeMs += result.durationMs;
+        ordersProcessed += result.ordersProcessed;
+        itemsProcessed += result.itemsProcessed;
+      },
+    });
+    fetchTimeMs += Date.now() - ordersFetchStart - ordersLoadTimeMs;
 
     const now = new Date();
     await prisma.etlMetadata.upsert({
@@ -305,6 +408,13 @@ export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise
       where: { datasetName: DATASET_NAME },
       create: { datasetName: DATASET_NAME, lastUpdatedAt: now, rowCount },
       update: { lastUpdatedAt: now, rowCount },
+    });
+
+    const ordersRowCount = await prisma.shopifyOrder.count();
+    await prisma.datasetStatus.upsert({
+      where: { datasetName: ORDERS_DATASET_NAME },
+      create: { datasetName: ORDERS_DATASET_NAME, lastUpdatedAt: now, rowCount: ordersRowCount },
+      update: { lastUpdatedAt: now, rowCount: ordersRowCount },
     });
 
     const totalTimeMs = Date.now() - t0;
@@ -338,6 +448,8 @@ export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise
       apiVariantsFetched,
       variantsExcludedByActiveFilter,
       dbRowCount,
+      ordersProcessed,
+      itemsProcessed,
       fetchTimeMs,
       loadTimeMs,
       totalTimeMs,
@@ -362,6 +474,8 @@ export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise
       variantsExcludedByActiveFilter,
       statusBreakdown,
       dbRowCount,
+      ordersProcessed,
+      itemsProcessed,
     };
   } catch (error) {
     const totalTimeMs = Date.now() - t0;
@@ -401,6 +515,8 @@ export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise
       apiVariantsFetched,
       variantsExcludedByActiveFilter,
       dbRowCount,
+      ordersProcessed,
+      itemsProcessed,
       fetchTimeMs,
       loadTimeMs,
       totalTimeMs,
@@ -426,6 +542,8 @@ export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise
       variantsExcludedByActiveFilter,
       statusBreakdown,
       dbRowCount,
+      ordersProcessed,
+      itemsProcessed,
       errorMessage,
     };
   }

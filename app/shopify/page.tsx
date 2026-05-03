@@ -26,13 +26,27 @@ type ShopifyItem = {
   updated_at: string;
 };
 
-type ShopifyResponse = {
+type ShopifyOrderItem = {
+  id: string;
+  order_number: string;
+  created_at: string;
+  sku: string;
+  title: string;
+  quantity: number;
+  price: string;
+  subtotal: string;
+  fulfillment_status: string;
+};
+
+type ShopifyResponse<TItem> = {
   total: number;
   page: number;
   pageSize: number;
-  items: ShopifyItem[];
+  items: TItem[];
   error?: string;
 };
+
+type ShopifyViewMode = "products" | "orders";
 
 type ShopifyStatusResponse = {
   isRunning: boolean;
@@ -56,7 +70,9 @@ type EtlBanner = {
 };
 
 export default function ShopifyPage() {
-  const [items, setItems] = useState<ShopifyItem[]>([]);
+  const [viewMode, setViewMode] = useState<ShopifyViewMode>("products");
+  const [productItems, setProductItems] = useState<ShopifyItem[]>([]);
+  const [orderItems, setOrderItems] = useState<ShopifyOrderItem[]>([]);
   const [total, setTotal] = useState(0);
   const [rowCount, setRowCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
@@ -87,44 +103,65 @@ export default function ShopifyPage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const loadPage = useCallback(async (page: number, options?: { silent?: boolean }) => {
-    const silent = options?.silent ?? false;
-    if (!silent) setIsLoading(true);
-    setError(null);
+  const loadPage = useCallback(
+    async (page: number, options?: { silent?: boolean }) => {
+      const silent = options?.silent ?? false;
+      if (!silent) setIsLoading(true);
+      setError(null);
 
-    try {
-      const params = new URLSearchParams({
-        page: String(page),
-        pageSize: String(PAGE_SIZE),
-      });
-      if (debouncedSearch.length > 0) {
-        params.set("search", debouncedSearch);
-      }
-      const response = await fetch(`/api/shopify?${params.toString()}`);
-      const body = (await response.json()) as ShopifyResponse;
-      if (!response.ok) {
-        throw new Error(body.error ?? response.statusText);
-      }
+      try {
+        const params = new URLSearchParams({
+          page: String(page),
+          pageSize: String(PAGE_SIZE),
+        });
+        if (debouncedSearch.length > 0) {
+          params.set("search", debouncedSearch);
+        }
 
-      setItems(body.items);
-      setTotal(body.total);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unexpected error while loading Shopify products";
-      setError(message);
-      if (!silent) {
-        setItems([]);
-        setTotal(0);
+        const endpoint = viewMode === "products" ? "/api/shopify" : "/api/shopify-orders";
+        const response = await fetch(`${endpoint}?${params.toString()}`);
+        if (viewMode === "products") {
+          const body = (await response.json()) as ShopifyResponse<ShopifyItem>;
+          if (!response.ok) {
+            throw new Error(body.error ?? response.statusText);
+          }
+          setProductItems(body.items);
+          setTotal(body.total);
+        } else {
+          const body = (await response.json()) as ShopifyResponse<ShopifyOrderItem>;
+          if (!response.ok) {
+            throw new Error(body.error ?? response.statusText);
+          }
+          setOrderItems(body.items);
+          setTotal(body.total);
+        }
+      } catch (err) {
+        const fallbackMessage =
+          viewMode === "products"
+            ? "Unexpected error while loading Shopify products"
+            : "Unexpected error while loading Shopify orders";
+        const message = err instanceof Error ? err.message : fallbackMessage;
+        setError(message);
+        if (!silent) {
+          if (viewMode === "products") {
+            setProductItems([]);
+          } else {
+            setOrderItems([]);
+          }
+          setTotal(0);
+        }
+      } finally {
+        if (!silent) setIsLoading(false);
       }
-    } finally {
-      if (!silent) setIsLoading(false);
-    }
-  }, [debouncedSearch]);
+    },
+    [debouncedSearch, viewMode],
+  );
 
   useEffect(() => {
     if (loadInit.current) {
       loadInit.current = false;
       prevSearchRef.current = debouncedSearch;
-      const key = `${debouncedSearch}::${currentPage}`;
+      const key = `${viewMode}::${debouncedSearch}::${currentPage}`;
       lastFetchKey.current = key;
       void loadPage(currentPage);
       return;
@@ -133,7 +170,7 @@ export default function ShopifyPage() {
     const searchChanged = prevSearchRef.current !== debouncedSearch;
     prevSearchRef.current = debouncedSearch;
     const page = searchChanged ? 1 : currentPage;
-    const key = `${debouncedSearch}::${page}`;
+    const key = `${viewMode}::${debouncedSearch}::${page}`;
 
     if (searchChanged && currentPage !== 1) {
       setCurrentPage(1);
@@ -141,7 +178,7 @@ export default function ShopifyPage() {
     if (lastFetchKey.current === key) return;
     lastFetchKey.current = key;
     void loadPage(page);
-  }, [currentPage, debouncedSearch, loadPage]);
+  }, [currentPage, debouncedSearch, loadPage, viewMode]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -215,7 +252,7 @@ export default function ShopifyPage() {
         } else {
           setEtlBanner({
             type: "success",
-            message: `Shopify sync complete — fetched ${summary.productsFetched} products, stored ${summary.variantsStored} variants, skipped ${summary.skippedNullSkus} null SKU variants.`,
+            message: `Shopify sync complete — ${summary.productsFetched} products, ${summary.variantsStored} variants, ${summary.ordersProcessed} paid orders, ${summary.itemsProcessed} order items.`,
           });
         }
       } catch (err) {
@@ -231,11 +268,11 @@ export default function ShopifyPage() {
   };
 
   const openSchema = useCallback(() => {
+    const tables = viewMode === "products" ? "shopify" : "shopify_orders";
     setSchemaOpen(true);
-    if (schemaColumns !== null) return;
     setSchemaLoading(true);
     setSchemaError(null);
-    void fetch("/api/db/schema?tables=shopify")
+    void fetch(`/api/db/schema?tables=${tables}`)
       .then(async (res) => {
         const data = (await res.json()) as SchemaResponse;
         if (!res.ok) {
@@ -254,7 +291,7 @@ export default function ShopifyPage() {
       .finally(() => {
         setSchemaLoading(false);
       });
-  }, [schemaColumns]);
+  }, [viewMode]);
 
   useEffect(() => {
     if (!schemaOpen) return;
@@ -267,6 +304,9 @@ export default function ShopifyPage() {
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const isEtlBusy = isPending || etlIsRunning;
+  const productMode = viewMode === "products";
+  const currentRows = productMode ? productItems : orderItems;
+  const rowLabel = productMode ? "variants" : "order items";
 
   const handleJumpToPage = useCallback(() => {
     if (jumpToPage.trim() === "") return;
@@ -276,6 +316,17 @@ export default function ShopifyPage() {
     setCurrentPage(nextPage);
     setJumpToPage("");
   }, [jumpToPage, totalPages]);
+
+  const handleViewModeChange = useCallback(
+    (mode: ShopifyViewMode) => {
+      if (mode === viewMode || isEtlBusy) return;
+      setViewMode(mode);
+      setCurrentPage(1);
+      setJumpToPage("");
+      lastFetchKey.current = null;
+    },
+    [isEtlBusy, viewMode],
+  );
 
   const byTable: Map<string, SchemaColumn[]> | null =
     schemaColumns === null
@@ -292,12 +343,47 @@ export default function ShopifyPage() {
       <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-6">
         <header className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-[#111827]/60 p-5 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">Shopify Products</h1>
+            <h1 className="text-xl font-semibold tracking-tight">Shopify Dataset</h1>
             <p className="mt-0.5 text-xs text-slate-400">
-              {syncLabel} {rowCount > 0 ? `· ${rowCount.toLocaleString()} variants` : ""}
+              {syncLabel}{" "}
+              {productMode
+                ? rowCount > 0
+                  ? `· ${rowCount.toLocaleString()} variants`
+                  : ""
+                : total > 0
+                  ? `· ${total.toLocaleString()} ${rowLabel}`
+                  : ""}
             </p>
           </div>
           <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
+            <div className="inline-flex rounded-lg border border-white/20 bg-black/20 p-1">
+              <button
+                type="button"
+                onClick={() => handleViewModeChange("products")}
+                disabled={isEtlBusy}
+                className={`rounded-md px-3 py-1.5 text-sm transition ${
+                  productMode
+                    ? "bg-sky-500/30 text-sky-100"
+                    : "text-slate-300 hover:bg-white/10 hover:text-slate-100"
+                } disabled:cursor-not-allowed disabled:opacity-50`}
+                aria-pressed={productMode}
+              >
+                Products
+              </button>
+              <button
+                type="button"
+                onClick={() => handleViewModeChange("orders")}
+                disabled={isEtlBusy}
+                className={`rounded-md px-3 py-1.5 text-sm transition ${
+                  !productMode
+                    ? "bg-sky-500/30 text-sky-100"
+                    : "text-slate-300 hover:bg-white/10 hover:text-slate-100"
+                } disabled:cursor-not-allowed disabled:opacity-50`}
+                aria-pressed={!productMode}
+              >
+                Orders
+              </button>
+            </div>
             <button
               type="button"
               onClick={handleRunShopifyEtl}
@@ -350,9 +436,17 @@ export default function ShopifyPage() {
                 type="search"
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
-                placeholder="Search by SKU or product title..."
+                placeholder={
+                  productMode
+                    ? "Search by SKU or product title..."
+                    : "Search by SKU, title, or order number..."
+                }
                 className="w-full max-w-md rounded-md border border-white/20 bg-black/20 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400/60"
-                aria-label="Search by SKU or product title"
+                aria-label={
+                  productMode
+                    ? "Search by SKU or product title"
+                    : "Search by SKU, title, or order number"
+                }
               />
             </div>
 
@@ -361,73 +455,133 @@ export default function ShopifyPage() {
                 <div className="flex-1 overflow-auto">
                   <table className="min-w-full border-separate border-spacing-0 text-sm">
                     <thead className="sticky top-0 z-10 bg-slate-950/95 text-xs uppercase tracking-wide text-slate-300">
-                      <tr>
-                        <th className="border-b border-white/10 px-3 py-3 text-left font-medium">SKU</th>
-                        <th className="border-b border-white/10 px-3 py-3 text-left font-medium">Product Title</th>
-                        <th className="border-b border-white/10 px-3 py-3 text-left font-medium">Variant Title</th>
-                        <th className="border-b border-white/10 px-3 py-3 text-left font-medium">Vendor</th>
-                        <th className="border-b border-white/10 px-3 py-3 text-left font-medium">Product Type</th>
-                        <th className="border-b border-white/10 px-3 py-3 text-right font-medium">Price</th>
-                        <th className="border-b border-white/10 px-3 py-3 text-right font-medium">Inventory Quantity</th>
-                        <th className="border-b border-white/10 px-3 py-3 text-left font-medium">Status</th>
-                        <th className="border-b border-white/10 px-3 py-3 text-right font-medium">Last Updated</th>
-                      </tr>
+                      {productMode ? (
+                        <tr>
+                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">SKU</th>
+                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">
+                            Product Title
+                          </th>
+                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">
+                            Variant Title
+                          </th>
+                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">Vendor</th>
+                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">
+                            Product Type
+                          </th>
+                          <th className="border-b border-white/10 px-3 py-3 text-right font-medium">Price</th>
+                          <th className="border-b border-white/10 px-3 py-3 text-right font-medium">
+                            Inventory Quantity
+                          </th>
+                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">Status</th>
+                          <th className="border-b border-white/10 px-3 py-3 text-right font-medium">Last Updated</th>
+                        </tr>
+                      ) : (
+                        <tr>
+                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">
+                            Order Number
+                          </th>
+                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">Created At</th>
+                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">SKU</th>
+                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">Title</th>
+                          <th className="border-b border-white/10 px-3 py-3 text-right font-medium">Quantity</th>
+                          <th className="border-b border-white/10 px-3 py-3 text-right font-medium">Price</th>
+                          <th className="border-b border-white/10 px-3 py-3 text-right font-medium">Subtotal</th>
+                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">
+                            Fulfillment Status
+                          </th>
+                        </tr>
+                      )}
                     </thead>
                     <tbody>
-                      {isLoading && items.length === 0 ? (
+                      {isLoading && currentRows.length === 0 ? (
                         Array.from({ length: 6 }).map((_, i) => (
                           <tr key={i} className="animate-pulse odd:bg-white/[0.02]">
-                            {Array.from({ length: 9 }).map((__, j) => (
+                            {Array.from({ length: productMode ? 9 : 8 }).map((__, j) => (
                               <td key={j} className="border-b border-white/5 px-3 py-3">
                                 <div className="h-3 rounded bg-white/10" />
                               </td>
                             ))}
                           </tr>
                         ))
-                      ) : items.length === 0 ? (
+                      ) : currentRows.length === 0 ? (
                         <tr>
-                          <td colSpan={9} className="px-3 py-8 text-center text-slate-400">
+                          <td colSpan={productMode ? 9 : 8} className="px-3 py-8 text-center text-slate-400">
                             {debouncedSearch.length > 0
-                              ? "No Shopify variants match this search."
-                              : "No Shopify variants yet. Click \"Run Shopify Sync\" to ingest data from Shopify."}
+                              ? productMode
+                                ? "No Shopify variants match this search."
+                                : "No Shopify order items match this search."
+                              : productMode
+                                ? "No Shopify variants yet. Click \"Run Shopify Sync\" to ingest data from Shopify."
+                                : "No Shopify order items yet. Click \"Run Shopify Sync\" to ingest data from Shopify."}
                           </td>
                         </tr>
                       ) : (
-                        items.map((item) => (
-                          <tr key={item.id} className="odd:bg-white/[0.02] hover:bg-sky-500/10">
-                            <td className="border-b border-white/5 px-3 py-2 font-mono text-xs text-slate-100">
-                              {item.sku || "—"}
-                            </td>
-                            <td className="border-b border-white/5 px-3 py-2 text-slate-200">
-                              <p className="max-w-[240px] truncate" title={item.product_title}>
-                                {item.product_title || "—"}
-                              </p>
-                            </td>
-                            <td className="border-b border-white/5 px-3 py-2 text-slate-200">
-                              <p className="max-w-[220px] truncate" title={item.variant_title}>
-                                {item.variant_title || "—"}
-                              </p>
-                            </td>
-                            <td className="border-b border-white/5 px-3 py-2 text-slate-200">
-                              {item.vendor || "—"}
-                            </td>
-                            <td className="border-b border-white/5 px-3 py-2 text-slate-200">
-                              {item.product_type || "—"}
-                            </td>
-                            <td className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200">
-                              {formatPrice(item.price)}
-                            </td>
-                            <td className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200">
-                              {formatNumber(item.inventory_quantity)}
-                            </td>
-                            <td className="border-b border-white/5 px-3 py-2 text-slate-200">
-                              {item.status || "—"}
-                            </td>
-                            <td className="border-b border-white/5 px-3 py-2 text-right text-slate-300">
-                              {formatDateTime(item.updated_at)}
-                            </td>
-                          </tr>
-                        ))
+                        productMode
+                          ? productItems.map((item) => (
+                              <tr key={item.id} className="odd:bg-white/[0.02] hover:bg-sky-500/10">
+                                <td className="border-b border-white/5 px-3 py-2 font-mono text-xs text-slate-100">
+                                  {item.sku || "—"}
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-slate-200">
+                                  <p className="max-w-[240px] truncate" title={item.product_title}>
+                                    {item.product_title || "—"}
+                                  </p>
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-slate-200">
+                                  <p className="max-w-[220px] truncate" title={item.variant_title}>
+                                    {item.variant_title || "—"}
+                                  </p>
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-slate-200">
+                                  {item.vendor || "—"}
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-slate-200">
+                                  {item.product_type || "—"}
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200">
+                                  {formatPrice(item.price)}
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200">
+                                  {formatNumber(item.inventory_quantity)}
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-slate-200">
+                                  {item.status || "—"}
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-right text-slate-300">
+                                  {formatDateTime(item.updated_at)}
+                                </td>
+                              </tr>
+                            ))
+                          : orderItems.map((item) => (
+                              <tr key={item.id} className="odd:bg-white/[0.02] hover:bg-sky-500/10">
+                                <td className="border-b border-white/5 px-3 py-2 font-mono text-xs text-slate-100">
+                                  {item.order_number || "—"}
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-slate-300">
+                                  {formatDateTime(item.created_at)}
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 font-mono text-xs text-slate-100">
+                                  {item.sku || "—"}
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-slate-200">
+                                  <p className="max-w-[260px] truncate" title={item.title}>
+                                    {item.title || "—"}
+                                  </p>
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200">
+                                  {formatNumber(item.quantity)}
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200">
+                                  {formatPrice(item.price)}
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200">
+                                  {formatPrice(item.subtotal)}
+                                </td>
+                                <td className="border-b border-white/5 px-3 py-2 text-slate-200">
+                                  {item.fulfillment_status || "—"}
+                                </td>
+                              </tr>
+                            ))
                       )}
                     </tbody>
                   </table>
@@ -502,7 +656,7 @@ export default function ShopifyPage() {
           <div className="relative z-10 flex max-h-[min(80vh,720px)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0F172A] shadow-xl">
             <div className="flex items-center justify-between border-b border-white/10 px-5 py-3">
               <h2 id="schema-title" className="text-lg font-semibold text-slate-100">
-                Shopify schema
+                Shopify schema ({productMode ? "products" : "orders"})
               </h2>
               <button
                 type="button"
