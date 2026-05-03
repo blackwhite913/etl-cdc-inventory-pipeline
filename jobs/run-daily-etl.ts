@@ -9,6 +9,7 @@ async function main() {
   let lockAcquired = false;
   let hadFailure = false;
   let hasUpstreamChanges = false;
+  let exitCode = 0;
 
   log("DAILY_ETL", "info", { event: "JOB_START" });
 
@@ -21,7 +22,6 @@ async function main() {
         reason: lockResult.reason,
         totalElapsedMs: Date.now() - startedAt,
       });
-      process.exit(0);
       return;
     }
 
@@ -92,7 +92,7 @@ async function main() {
       totalElapsedMs: Date.now() - startedAt,
     });
 
-    process.exit(hadFailure ? 1 : 0);
+    exitCode = hadFailure ? 1 : 0;
   } catch (error) {
     log("DAILY_ETL", "error", {
       event: "JOB_END",
@@ -100,12 +100,14 @@ async function main() {
       error: error instanceof Error ? error.message : String(error),
       totalElapsedMs: Date.now() - startedAt,
     });
-    process.exit(1);
+    exitCode = 1;
   } finally {
     if (lockAcquired) {
       await releaseEtlLock("daily-etl");
     }
   }
+
+  process.exit(exitCode);
 }
 
 void main();
