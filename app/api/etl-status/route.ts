@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   try {
-    const [latestRun, lastSuccessEtl, snapshotAgg, isRunning] = await Promise.all([
+    const [latestRun, lastSuccessEtl, snapshotAgg, hasActiveLock] = await Promise.all([
       prisma.etlRun.findFirst({
         orderBy: { startedAt: "desc" },
         select: {
@@ -40,6 +40,7 @@ export async function GET() {
       isAnyEtlLockActive(),
     ]);
 
+    const isRunning = latestRun?.status === "RUNNING" && hasActiveLock;
     const lastEtlSuccessAt = lastSuccessEtl?.finishedAt ?? null;
     const dataLastWrittenAt = snapshotAgg._max.snapshotAt ?? null;
     const maxLastModifiedInDb = snapshotAgg._max.lastModified ?? null;
