@@ -4,7 +4,7 @@
 //   - StockSnapshot : current-state table keyed by (productCode, warehouseCode).
 //                     Source of truth for the CDC cursor (MAX(lastModified)).
 //   - EtlRun        : observability-only run log. Never feeds CDC decisions.
-//   - EtlLock       : singleton lock row preventing concurrent ETL runs.
+//   - EtlLock       : per-job lock rows preventing concurrent ETL runs.
 
 generator client {
   provider = "prisma-client-js"
@@ -70,10 +70,8 @@ model EtlRun {
 }
 
 model EtlLock {
-  // Single-row sentinel; id is always "singleton".
-  id         String   @id @default("singleton")
-  holder     String
-  acquiredAt DateTime @default(now())
+  jobName    String   @id
+  acquiredAt DateTime
   expiresAt  DateTime
 }
 

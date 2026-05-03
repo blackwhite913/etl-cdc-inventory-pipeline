@@ -103,7 +103,7 @@ async function main() {
     process.exit(1);
   } finally {
     if (lockAcquired) {
-      await releaseEtlLock();
+      await releaseEtlLock("daily-etl");
     }
   }
 }
