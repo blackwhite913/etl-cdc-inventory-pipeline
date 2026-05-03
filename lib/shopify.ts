@@ -67,7 +67,7 @@ type ShopifyOrderLineItemsConnection = {
 
 type ShopifyOrderNode = {
   id: string;
-  orderNumber: number | null;
+  name: string | null;
   createdAt: string | null;
   subtotalPriceSet: ShopifyMoneySet | null;
   displayFinancialStatus: string | null;
@@ -288,7 +288,7 @@ function buildOrdersQuery(): string {
         }
         nodes {
           id
-          orderNumber
+          name
           createdAt
           subtotalPriceSet {
             shopMoney {
@@ -359,7 +359,7 @@ function toShopifyOrderLineItem(node: ShopifyOrderLineItemNode): ShopifyOrderLin
 function toShopifyOrder(node: ShopifyOrderNode): ShopifyOrder {
   return {
     id: node.id,
-    orderNumber: node.orderNumber === null ? null : String(node.orderNumber),
+    orderNumber: node.name,
     createdAt: node.createdAt,
     subtotalPrice: node.subtotalPriceSet?.shopMoney?.amount ?? null,
     financialStatus: node.displayFinancialStatus,
