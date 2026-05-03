@@ -8,7 +8,6 @@ import { transformToSnapshotRow } from "@/lib/transform-stock";
 // which only affects the date sent near midnight UTC. A daily full sync
 // (via /api/cron/full-sync) compensates for this limitation.
 const CDC_OVERLAP_MS = 5_000;
-const ETL_LOCK_KEY = 12_345;
 const DEFAULT_FULL_LOAD_INTERVAL_HOURS = 24;
 const DEFAULT_LOW_ROWS_WARNING_THRESHOLD = 0;
 
@@ -69,21 +68,9 @@ function shouldWarnForLowCdcRows(rows: number): boolean {
   return rows <= threshold;
 }
 
-async function tryAcquireAdvisoryLock(): Promise<boolean> {
-  const rows = await prisma.$queryRaw<Array<{ acquired: boolean }>>`
-    SELECT pg_try_advisory_lock(${ETL_LOCK_KEY}) AS acquired
-  `;
-  return rows[0]?.acquired ?? false;
-}
-
-async function releaseAdvisoryLock(): Promise<void> {
-  await prisma.$executeRaw`SELECT pg_advisory_unlock(${ETL_LOCK_KEY})`;
-}
-
 export async function runEtl(options: EtlOptions = {}): Promise<EtlSummary> {
   console.log("ETL START", new Date());
   const t0 = Date.now();
-  let lockAcquired = false;
 
   try {
     const existingCount = await prisma.stockSnapshot.count();
@@ -109,36 +96,6 @@ export async function runEtl(options: EtlOptions = {}): Promise<EtlSummary> {
         );
         mode = "FULL_LOAD";
       }
-    }
-
-    lockAcquired = await tryAcquireAdvisoryLock();
-    if (!lockAcquired) {
-      const totalTimeMs = Date.now() - t0;
-      const skippedRun = await prisma.etlRun.create({
-        data: {
-          mode,
-          status: "SKIPPED_LOCKED",
-          finishedAt: new Date(),
-          totalTimeMs,
-          errorMessage: "Skipped because another ETL run currently holds the lock",
-        },
-      });
-
-      console.log(`[etl] skipped — advisory lock already held`);
-      return {
-        runId: skippedRun.id,
-        mode,
-        status: "SKIPPED_LOCKED",
-        recordsProcessed: 0,
-        inserted: 0,
-        updated: 0,
-        partialFailures: 0,
-        fetchTimeMs: 0,
-        loadTimeMs: 0,
-        totalTimeMs,
-        cdcCursorUsed: null,
-        latestLastModifiedSeen: null,
-      };
     }
 
     const run = await prisma.etlRun.create({
@@ -350,15 +307,6 @@ export async function runEtl(options: EtlOptions = {}): Promise<EtlSummary> {
       };
     }
   } finally {
-    if (lockAcquired) {
-      await releaseAdvisoryLock().catch((unlockErr) => {
-        console.error(
-          `[etl] advisory unlock failed error=${
-            unlockErr instanceof Error ? unlockErr.message : String(unlockErr)
-          }`,
-        );
-      });
-    }
     console.log("ETL END", new Date());
   }
 }

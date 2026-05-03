@@ -5,7 +5,6 @@ import { loadBomBatch } from "@/lib/load-bom";
 import { log } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 
-const BOM_ETL_LOCK_KEY = 12_346;
 const JOB_NAME = "bom_etl";
 const DATASET_NAME = "bom";
 
@@ -75,17 +74,6 @@ export type BomPaginationParams = {
   pageSize: number;
   search?: string;
 };
-
-async function tryAcquireAdvisoryLock(): Promise<boolean> {
-  const rows = await prisma.$queryRaw<Array<{ acquired: boolean }>>`
-    SELECT pg_try_advisory_lock(${BOM_ETL_LOCK_KEY}) AS acquired
-  `;
-  return rows[0]?.acquired ?? false;
-}
-
-async function releaseAdvisoryLock(): Promise<void> {
-  await prisma.$executeRaw`SELECT pg_advisory_unlock(${BOM_ETL_LOCK_KEY})`;
-}
 
 export async function getBomPaginated(params: BomPaginationParams): Promise<BomPaginatedResult> {
   const page = Math.max(1, params.page);
@@ -175,7 +163,6 @@ export async function getBomStatus(): Promise<BomStatusResult> {
 
 export async function runBomEtl(): Promise<BomEtlSummary> {
   const t0 = Date.now();
-  let lockAcquired = false;
   let runId: string | null = null;
   let mode: BomEtlMode | null = null;
   let cdcCursorUsed: Date | null = null;
@@ -212,36 +199,6 @@ export async function runBomEtl(): Promise<BomEtlSummary> {
       emptyProductCodes: emptyProductCodeCount,
       cdcCursorUsed: cdcCursorUsed?.toISOString() ?? null,
     });
-
-    lockAcquired = await tryAcquireAdvisoryLock();
-    if (!lockAcquired) {
-      const totalTimeMs = Date.now() - t0;
-      const skippedRun = await prisma.etlRun.create({
-        data: {
-          mode: mode ?? "BOM_CDC",
-          status: "SKIPPED_LOCKED",
-          finishedAt: new Date(),
-          totalTimeMs,
-          errorMessage: "Skipped because another BOM ETL run currently holds the lock",
-        },
-      });
-
-      return {
-        runId: skippedRun.id,
-        mode,
-        status: "SKIPPED_LOCKED",
-        recordsProcessed: 0,
-        inserted: 0,
-        updated: 0,
-        linesInserted: 0,
-        partialFailures: 0,
-        fetchTimeMs: 0,
-        loadTimeMs: 0,
-        totalTimeMs,
-        cdcCursorUsed: cdcCursorUsed?.toISOString() ?? null,
-        latestLastModifiedSeen: null,
-      };
-    }
 
     const run = await prisma.etlRun.create({
       data: { mode, status: "RUNNING", cdcCursorUsed },
@@ -386,9 +343,5 @@ export async function runBomEtl(): Promise<BomEtlSummary> {
       latestLastModifiedSeen: null,
       errorMessage,
     };
-  } finally {
-    if (lockAcquired) {
-      await releaseAdvisoryLock().catch(() => undefined);
-    }
   }
 }

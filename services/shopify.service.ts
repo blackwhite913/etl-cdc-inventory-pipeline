@@ -5,7 +5,6 @@ import { loadShopifyBatch } from "@/lib/load-shopify";
 import { log } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 
-const SHOPIFY_ETL_LOCK_KEY = 12_347;
 const JOB_NAME = "shopify_etl";
 const DATASET_NAME = "shopify";
 
@@ -87,17 +86,6 @@ export type ShopifyPaginationParams = {
   pageSize: number;
   search?: string;
 };
-
-async function tryAcquireAdvisoryLock(): Promise<boolean> {
-  const rows = await prisma.$queryRaw<Array<{ acquired: boolean }>>`
-    SELECT pg_try_advisory_lock(${SHOPIFY_ETL_LOCK_KEY}) AS acquired
-  `;
-  return rows[0]?.acquired ?? false;
-}
-
-async function releaseAdvisoryLock(): Promise<void> {
-  await prisma.$executeRaw`SELECT pg_advisory_unlock(${SHOPIFY_ETL_LOCK_KEY})`;
-}
 
 function trackLatest(current: Date | null, candidate: Date | null | undefined): Date | null {
   if (!candidate) return current;
@@ -231,7 +219,6 @@ export async function getShopifyStatus(): Promise<ShopifyStatusResult> {
 
 export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise<ShopifyEtlSummary> {
   const t0 = Date.now();
-  let lockAcquired = false;
   let runId: string | null = null;
   let mode: ShopifyEtlMode | null = null;
   let cdcCursorUsed: Date | null = null;
@@ -270,41 +257,6 @@ export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise
       existingRows: existingCount,
       cdcCursorUsed: cdcCursorUsed?.toISOString() ?? null,
     });
-
-    lockAcquired = await tryAcquireAdvisoryLock();
-    if (!lockAcquired) {
-      const totalTimeMs = Date.now() - t0;
-      const skippedRun = await prisma.etlRun.create({
-        data: {
-          mode: mode ?? "SHOPIFY_CDC",
-          status: "SKIPPED_LOCKED",
-          finishedAt: new Date(),
-          totalTimeMs,
-          errorMessage: "Skipped because another Shopify ETL run currently holds the lock",
-        },
-      });
-
-      return {
-        runId: skippedRun.id,
-        mode,
-        status: "SKIPPED_LOCKED",
-        recordsProcessed: 0,
-        inserted: 0,
-        updated: 0,
-        productsFetched: 0,
-        variantsStored: 0,
-        skippedNullSkus: 0,
-        fetchTimeMs: 0,
-        loadTimeMs: 0,
-        totalTimeMs,
-        cdcCursorUsed: cdcCursorUsed?.toISOString() ?? null,
-        latestLastModifiedSeen: null,
-        apiVariantsFetched: 0,
-        variantsExcludedByActiveFilter: 0,
-        statusBreakdown: {},
-        dbRowCount: existingCount,
-      };
-    }
 
     const run = await prisma.etlRun.create({
       data: { mode, status: "RUNNING", cdcCursorUsed },
@@ -476,9 +428,5 @@ export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise
       dbRowCount,
       errorMessage,
     };
-  } finally {
-    if (lockAcquired) {
-      await releaseAdvisoryLock().catch(() => undefined);
-    }
   }
 }

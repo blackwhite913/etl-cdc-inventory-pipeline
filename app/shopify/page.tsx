@@ -145,10 +145,12 @@ export default function ShopifyPage() {
 
   useEffect(() => {
     const id = setInterval(() => {
-      void loadPage(currentPage, { silent: true });
+      if (!etlIsRunning) {
+        void loadPage(currentPage, { silent: true });
+      }
     }, AUTO_REFRESH_MS);
     return () => clearInterval(id);
-  }, [currentPage, loadPage]);
+  }, [currentPage, etlIsRunning, loadPage]);
 
   const pollShopifyStatus = useCallback(async () => {
     try {
@@ -204,7 +206,7 @@ export default function ShopifyPage() {
       try {
         const summary = await runShopifyEtlAction();
         if (summary.status === "SKIPPED_LOCKED") {
-          setEtlBanner({ type: "info", message: "Shopify sync is already running — skipped." });
+          setEtlBanner({ type: "info", message: "Sync already in progress (started recently)" });
         } else if (summary.status === "FAILED") {
           setEtlBanner({
             type: "error",
