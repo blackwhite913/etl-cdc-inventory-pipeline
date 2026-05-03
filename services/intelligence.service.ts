@@ -90,6 +90,27 @@ export type ShopifySalesRefreshResult = {
   refreshedAt: string;
 };
 
+async function ensureShopifySalesTable(): Promise<void> {
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "ShopifySalesRow" (
+      "sku" TEXT PRIMARY KEY,
+      "description" TEXT,
+      "units7d" INTEGER NOT NULL DEFAULT 0,
+      "units30d" INTEGER NOT NULL DEFAULT 0,
+      "units90d" INTEGER NOT NULL DEFAULT 0,
+      "revenue7d" DECIMAL NOT NULL DEFAULT 0,
+      "revenue30d" DECIMAL NOT NULL DEFAULT 0,
+      "revenue90d" DECIMAL NOT NULL DEFAULT 0,
+      "refreshedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS "ShopifySalesRow_units30d_idx"
+    ON "ShopifySalesRow"("units30d")
+  `);
+}
+
 export function parseViewMode(raw: string | null): ShopStockViewMode {
   const v = (raw ?? "joined").trim().toLowerCase();
   if (v === "missing_snapshot") return "missing_snapshot";
@@ -329,6 +350,7 @@ export async function refreshShopStock(): Promise<IntelligenceRefreshResult> {
 export async function refreshShopifySales(): Promise<ShopifySalesRefreshResult> {
   const startedAt = Date.now();
   log("INTELLIGENCE_REFRESH_SHOPIFY_SALES", "info", { event: "start" });
+  await ensureShopifySalesTable();
 
   await prisma.$transaction(async (tx) => {
     await tx.$executeRaw(Prisma.sql`DELETE FROM "ShopifySalesRow"`);
@@ -396,6 +418,8 @@ export async function refreshShopifySales(): Promise<ShopifySalesRefreshResult> 
 export async function getShopifySalesPaginated(
   params: ShopifySalesPageParams,
 ): Promise<ShopifySalesPaginatedResult> {
+  await ensureShopifySalesTable();
+
   const page = Math.max(1, params.page);
   const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, params.pageSize));
   const skip = (page - 1) * pageSize;
