@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { isAnyEtlLockActive } from "@/lib/etl-lock";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   try {
-    const [latestRun, lastSuccessEtl, snapshotAgg, activeLockRow] = await Promise.all([
+    const [latestRun, lastSuccessEtl, snapshotAgg, isRunning] = await Promise.all([
       prisma.etlRun.findFirst({
         orderBy: { startedAt: "desc" },
         select: {
@@ -36,16 +37,8 @@ export async function GET() {
       prisma.stockSnapshot.aggregate({
         _max: { snapshotAt: true, lastModified: true },
       }),
-      prisma.etlLock
-        .findFirst({
-          where: { expiresAt: { gt: new Date() } },
-          orderBy: { acquiredAt: "desc" },
-          select: { expiresAt: true },
-        })
-        .catch(() => null),
+      isAnyEtlLockActive(),
     ]);
-
-    const isRunning = activeLockRow !== null;
 
     const lastEtlSuccessAt = lastSuccessEtl?.finishedAt ?? null;
     const dataLastWrittenAt = snapshotAgg._max.snapshotAt ?? null;
