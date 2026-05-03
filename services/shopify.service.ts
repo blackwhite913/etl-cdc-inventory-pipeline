@@ -67,16 +67,21 @@ export type ShopifyPaginatedResult = {
   items: ShopifyListItem[];
 };
 
-export type ShopifyOrderListItem = {
+export type ShopifyOrderLineListItem = {
   id: string;
-  order_number: string;
-  created_at: string;
   sku: string;
   title: string;
   quantity: number;
   price: string;
+};
+
+export type ShopifyOrderListItem = {
+  id: string;
+  order_number: string;
+  created_at: string;
   subtotal: string;
   fulfillment_status: string;
+  line_items: ShopifyOrderLineListItem[];
 };
 
 export type ShopifyOrdersPaginatedResult = {
@@ -167,7 +172,7 @@ export async function getShopifyPaginated(
   return { total, page, pageSize, items };
 }
 
-export async function getShopifyOrdersPaginated(
+export async function getShopifyOrdersGrouped(
   params: ShopifyPaginationParams,
 ): Promise<ShopifyOrdersPaginatedResult> {
   const page = Math.max(1, params.page);
@@ -175,38 +180,36 @@ export async function getShopifyOrdersPaginated(
   const skip = (page - 1) * pageSize;
   const search = (params.search ?? "").trim();
 
-  const where: Prisma.ShopifyOrderItemWhereInput | undefined =
+  const where: Prisma.ShopifyOrderWhereInput | undefined =
     search.length > 0
       ? {
           OR: [
-            { sku: { contains: search, mode: "insensitive" } },
-            { title: { contains: search, mode: "insensitive" } },
-            {
-              order: {
-                orderNumber: { contains: search, mode: "insensitive" },
-              },
-            },
+            { orderNumber: { contains: search, mode: "insensitive" } },
+            { lineItems: { some: { sku: { contains: search, mode: "insensitive" } } } },
+            { lineItems: { some: { title: { contains: search, mode: "insensitive" } } } },
           ],
         }
       : undefined;
 
   const [total, rows] = await Promise.all([
-    prisma.shopifyOrderItem.count({ where }),
-    prisma.shopifyOrderItem.findMany({
+    prisma.shopifyOrder.count({ where }),
+    prisma.shopifyOrder.findMany({
       where,
       include: {
-        order: {
+        lineItems: {
           select: {
-            orderNumber: true,
-            createdAt: true,
-            subtotalPrice: true,
-            fulfillmentStatus: true,
+            id: true,
+            sku: true,
+            title: true,
+            quantity: true,
+            price: true,
           },
+          orderBy: [{ sku: "asc" }, { id: "asc" }],
         },
       },
       orderBy: [
-        { order: { createdAt: "desc" } },
-        { order: { orderNumber: "desc" } },
+        { createdAt: "desc" },
+        { orderNumber: "desc" },
         { id: "asc" },
       ],
       skip,
@@ -216,14 +219,17 @@ export async function getShopifyOrdersPaginated(
 
   const items = rows.map((row) => ({
     id: row.id,
-    order_number: row.order.orderNumber,
-    created_at: row.order.createdAt.toISOString(),
-    sku: row.sku,
-    title: row.title,
-    quantity: row.quantity,
-    price: row.price?.toString() ?? "",
-    subtotal: row.order.subtotalPrice?.toString() ?? "",
-    fulfillment_status: row.order.fulfillmentStatus ?? "",
+    order_number: row.orderNumber,
+    created_at: row.createdAt.toISOString(),
+    subtotal: row.subtotalPrice?.toString() ?? "",
+    fulfillment_status: row.fulfillmentStatus ?? "",
+    line_items: row.lineItems.map((line) => ({
+      id: line.id,
+      sku: line.sku,
+      title: line.title,
+      quantity: line.quantity,
+      price: line.price?.toString() ?? "",
+    })),
   }));
 
   return { total, page, pageSize, items };

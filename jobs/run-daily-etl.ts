@@ -1,7 +1,7 @@
 import { acquireEtlLock, releaseEtlLock } from "@/lib/etl-lock";
 import { log } from "@/lib/logger";
 import { runBomEtl } from "@/services/bom.service";
-import { refreshShopStock } from "@/services/intelligence.service";
+import { refreshShopStock, refreshShopifySales } from "@/services/intelligence.service";
 import { runShopifyEtl } from "@/services/shopify.service";
 
 async function main() {
@@ -70,10 +70,14 @@ async function main() {
     if (hasUpstreamChanges) {
       log("DAILY_ETL", "info", { event: "INTELLIGENCE_REFRESH" });
       try {
-        const refreshSummary = await refreshShopStock();
+        const [shopStockSummary, shopifySalesSummary] = await Promise.all([
+          refreshShopStock(),
+          refreshShopifySales(),
+        ]);
         log("DAILY_ETL", "info", {
           event: "INTELLIGENCE_REFRESH_DONE",
-          ...refreshSummary,
+          shopStock: shopStockSummary,
+          shopifySales: shopifySalesSummary,
         });
       } catch (error) {
         hadFailure = true;

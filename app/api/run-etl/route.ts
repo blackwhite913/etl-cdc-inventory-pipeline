@@ -4,6 +4,7 @@ import { requireCronSecret } from "@/lib/auth";
 import { runBomEtl } from "@/lib/run-bom-etl";
 import { runEtl } from "@/lib/run-etl";
 import { runShopifyEtl } from "@/lib/run-shopify-etl";
+import { refreshShopifySales } from "@/services/intelligence.service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,12 +16,10 @@ async function handle(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const job = (searchParams.get("job") ?? "stock").toLowerCase();
-    const summary =
-      job === "bom"
-        ? await runBomEtl()
-        : job === "shopify"
-          ? await runShopifyEtl()
-          : await runEtl();
+    const summary = job === "bom" ? await runBomEtl() : job === "shopify" ? await runShopifyEtl() : await runEtl();
+    if (job === "shopify" && summary.status === "SUCCESS") {
+      await refreshShopifySales();
+    }
     const httpStatus = summary.status === "FAILED" ? 502 : 200;
     return NextResponse.json(summary, { status: httpStatus });
   } catch (err) {

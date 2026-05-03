@@ -156,6 +156,20 @@ model ShopifyOrderItem {
   @@index([sku])
 }
 
+model ShopifySalesRow {
+  sku         String   @id
+  description String?
+  units7d     Int      @default(0)
+  units30d    Int      @default(0)
+  units90d    Int      @default(0)
+  revenue7d   Decimal  @default(0)
+  revenue30d  Decimal  @default(0)
+  revenue90d  Decimal  @default(0)
+  refreshedAt DateTime @default(now())
+
+  @@index([units30d])
+}
+
 model EtlMetadata {
   jobName   String   @id
   lastRunAt DateTime?

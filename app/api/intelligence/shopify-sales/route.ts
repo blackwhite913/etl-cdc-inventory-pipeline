@@ -3,8 +3,8 @@ import { NextResponse } from "next/server";
 import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
-  getShopifyOrdersGrouped,
-} from "@/services/shopify.service";
+  getShopifySalesPaginated,
+} from "@/services/intelligence.service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,10 +18,11 @@ export async function GET(request: Request) {
       Math.max(1, parseInt(searchParams.get("pageSize") ?? String(DEFAULT_PAGE_SIZE), 10) || DEFAULT_PAGE_SIZE),
     );
     const search = (searchParams.get("search") ?? "").trim();
-    const data = await getShopifyOrdersGrouped({ page, pageSize, search });
+
+    const data = await getShopifySalesPaginated({ page, pageSize, search });
     return NextResponse.json(data);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to load Shopify orders";
+    const message = err instanceof Error ? err.message : "Failed to load Shopify sales intelligence";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

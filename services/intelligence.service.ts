@@ -4,6 +4,7 @@ import { log } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 
 const DATASET_NAME = "shop_stock";
+const SHOPIFY_SALES_DATASET_NAME = "shopify_sales";
 export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 200;
 
@@ -60,6 +61,35 @@ export type IntelligenceRefreshResult = {
   refreshedAt: string;
 };
 
+type ShopifySalesTableRow = {
+  sku: string;
+  description: string | null;
+  units_7d: number;
+  units_30d: number;
+  units_90d: number;
+  revenue_7d: string;
+  revenue_30d: string;
+  revenue_90d: string;
+};
+
+export type ShopifySalesPageParams = {
+  page: number;
+  pageSize: number;
+  search?: string;
+};
+
+export type ShopifySalesPaginatedResult = {
+  total: number;
+  page: number;
+  pageSize: number;
+  items: ShopifySalesTableRow[];
+};
+
+export type ShopifySalesRefreshResult = {
+  rowCount: number;
+  refreshedAt: string;
+};
+
 export function parseViewMode(raw: string | null): ShopStockViewMode {
   const v = (raw ?? "joined").trim().toLowerCase();
   if (v === "missing_snapshot") return "missing_snapshot";
@@ -92,6 +122,19 @@ function buildMissingWhere(search: string): Prisma.Sql {
       OR COALESCE(sv."productTitle", '') ILIKE ${searchLike}
       OR COALESCE(sv."variantTitle", '') ILIKE ${searchLike}
     )
+  `;
+}
+
+function buildShopifySalesWhere(search: string): Prisma.Sql {
+  if (search.length === 0) {
+    return Prisma.sql``;
+  }
+
+  const searchLike = `%${search}%`;
+  return Prisma.sql`
+    WHERE
+      COALESCE(ssr."sku", '') ILIKE ${searchLike}
+      OR COALESCE(ssr."description", '') ILIKE ${searchLike}
   `;
 }
 
@@ -280,5 +323,112 @@ export async function refreshShopStock(): Promise<IntelligenceRefreshResult> {
     rowCount,
     missingFromSnapshotCount,
     refreshedAt: now.toISOString(),
+  };
+}
+
+export async function refreshShopifySales(): Promise<ShopifySalesRefreshResult> {
+  const startedAt = Date.now();
+  log("INTELLIGENCE_REFRESH_SHOPIFY_SALES", "info", { event: "start" });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw(Prisma.sql`DELETE FROM "ShopifySalesRow"`);
+
+    await tx.$executeRaw(Prisma.sql`
+      INSERT INTO "ShopifySalesRow" (
+        "sku",
+        "description",
+        "units7d",
+        "units30d",
+        "units90d",
+        "revenue7d",
+        "revenue30d",
+        "revenue90d",
+        "refreshedAt"
+      )
+      SELECT
+        soi."sku" AS sku,
+        MAX(NULLIF(TRIM(soi."title"), '')) AS description,
+        COALESCE(SUM(CASE WHEN so."createdAt" >= NOW() - INTERVAL '7 days' THEN soi."quantity" ELSE 0 END), 0)::int AS "units7d",
+        COALESCE(SUM(CASE WHEN so."createdAt" >= NOW() - INTERVAL '30 days' THEN soi."quantity" ELSE 0 END), 0)::int AS "units30d",
+        COALESCE(SUM(CASE WHEN so."createdAt" >= NOW() - INTERVAL '90 days' THEN soi."quantity" ELSE 0 END), 0)::int AS "units90d",
+        COALESCE(SUM(CASE WHEN so."createdAt" >= NOW() - INTERVAL '7 days' THEN soi."quantity" * COALESCE(soi."price", 0) ELSE 0 END), 0) AS "revenue7d",
+        COALESCE(SUM(CASE WHEN so."createdAt" >= NOW() - INTERVAL '30 days' THEN soi."quantity" * COALESCE(soi."price", 0) ELSE 0 END), 0) AS "revenue30d",
+        COALESCE(SUM(CASE WHEN so."createdAt" >= NOW() - INTERVAL '90 days' THEN soi."quantity" * COALESCE(soi."price", 0) ELSE 0 END), 0) AS "revenue90d",
+        NOW() AS "refreshedAt"
+      FROM "ShopifyOrderItem" soi
+      INNER JOIN "ShopifyOrder" so
+        ON so.id = soi."orderId"
+      WHERE
+        UPPER(COALESCE(so."financialStatus", '')) = 'PAID'
+        AND TRIM(COALESCE(soi."sku", '')) <> ''
+        AND UPPER(soi."sku") NOT LIKE 'PAC-%'
+        AND LOWER(COALESCE(soi."title", '')) NOT LIKE '%gift%'
+        AND LOWER(COALESCE(soi."title", '')) NOT LIKE '%personalisation%'
+      GROUP BY soi."sku"
+    `);
+  });
+
+  const rowCountRows = await prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+    SELECT COUNT(*)::int AS total
+    FROM "ShopifySalesRow"
+  `);
+
+  const rowCount = rowCountRows[0]?.total ?? 0;
+  const now = new Date();
+  await prisma.datasetStatus.upsert({
+    where: { datasetName: SHOPIFY_SALES_DATASET_NAME },
+    create: { datasetName: SHOPIFY_SALES_DATASET_NAME, lastUpdatedAt: now, rowCount },
+    update: { lastUpdatedAt: now, rowCount },
+  });
+
+  log("INTELLIGENCE_REFRESH_SHOPIFY_SALES", "info", {
+    event: "end",
+    rowCount,
+    totalTimeMs: Date.now() - startedAt,
+  });
+
+  return {
+    rowCount,
+    refreshedAt: now.toISOString(),
+  };
+}
+
+export async function getShopifySalesPaginated(
+  params: ShopifySalesPageParams,
+): Promise<ShopifySalesPaginatedResult> {
+  const page = Math.max(1, params.page);
+  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, params.pageSize));
+  const skip = (page - 1) * pageSize;
+  const search = (params.search ?? "").trim();
+  const whereSql = buildShopifySalesWhere(search);
+
+  const countRows = await prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+    SELECT COUNT(*)::int AS total
+    FROM "ShopifySalesRow" ssr
+    ${whereSql}
+  `);
+
+  const rows = await prisma.$queryRaw<ShopifySalesTableRow[]>(Prisma.sql`
+    SELECT
+      ssr."sku" AS sku,
+      ssr."description" AS description,
+      ssr."units7d" AS units_7d,
+      ssr."units30d" AS units_30d,
+      ssr."units90d" AS units_90d,
+      ssr."revenue7d"::text AS revenue_7d,
+      ssr."revenue30d"::text AS revenue_30d,
+      ssr."revenue90d"::text AS revenue_90d
+    FROM "ShopifySalesRow" ssr
+    ${whereSql}
+    ORDER BY ssr."units30d" DESC, ssr."sku" ASC
+    LIMIT ${pageSize}
+    OFFSET ${skip}
+  `);
+
+  return {
+    total: countRows[0]?.total ?? 0,
+    page,
+    pageSize,
+    items: rows,
   };
 }

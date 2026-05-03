@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { requireCronSecret } from "@/lib/auth";
+import { refreshShopifySales } from "@/services/intelligence.service";
 import { runShopifyEtl } from "@/services/shopify.service";
 
 export const runtime = "nodejs";
@@ -12,6 +13,9 @@ export async function GET(request: Request) {
 
   try {
     const summary = await runShopifyEtl();
+    if (summary.status === "SUCCESS") {
+      await refreshShopifySales();
+    }
     const httpStatus = summary.status === "FAILED" ? 502 : 200;
     return NextResponse.json(summary, { status: httpStatus });
   } catch (err) {

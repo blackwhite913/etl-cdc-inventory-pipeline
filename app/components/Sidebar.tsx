@@ -26,7 +26,10 @@ const upcomingItems: NavItem[] = [
 const intelligenceSections: NavSection[] = [
   {
     label: "Intelligence",
-    items: [{ label: "Shop Stock", href: "/intelligence/shop-stock" }],
+    items: [
+      { label: "Shop Stock", href: "/intelligence/shop-stock" },
+      { label: "Shopify Sales", href: "/intelligence/shopify-sales" },
+    ],
   },
 ];
 

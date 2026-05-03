@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import { runShopifyEtlAction } from "./actions";
 
@@ -30,12 +30,15 @@ type ShopifyOrderItem = {
   id: string;
   order_number: string;
   created_at: string;
-  sku: string;
-  title: string;
-  quantity: number;
-  price: string;
   subtotal: string;
   fulfillment_status: string;
+  line_items: Array<{
+    id: string;
+    sku: string;
+    title: string;
+    quantity: number;
+    price: string;
+  }>;
 };
 
 type ShopifyResponse<TItem> = {
@@ -89,6 +92,7 @@ export default function ShopifyPage() {
   const [schemaLoading, setSchemaLoading] = useState(false);
   const [schemaError, setSchemaError] = useState<string | null>(null);
   const [schemaColumns, setSchemaColumns] = useState<SchemaColumn[] | null>(null);
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const loadInit = useRef(true);
@@ -306,7 +310,11 @@ export default function ShopifyPage() {
   const isEtlBusy = isPending || etlIsRunning;
   const productMode = viewMode === "products";
   const currentRows = productMode ? productItems : orderItems;
-  const rowLabel = productMode ? "variants" : "order items";
+  const rowLabel = productMode ? "variants" : "orders";
+
+  const toggleOrderExpanded = useCallback((orderId: string) => {
+    setExpandedOrderId((prev) => (prev === orderId ? null : orderId));
+  }, []);
 
   const handleJumpToPage = useCallback(() => {
     if (jumpToPage.trim() === "") return;
@@ -321,6 +329,7 @@ export default function ShopifyPage() {
     (mode: ShopifyViewMode) => {
       if (mode === viewMode || isEtlBusy) return;
       setViewMode(mode);
+      setExpandedOrderId(null);
       setCurrentPage(1);
       setJumpToPage("");
       lastFetchKey.current = null;
@@ -481,10 +490,6 @@ export default function ShopifyPage() {
                             Order Number
                           </th>
                           <th className="border-b border-white/10 px-3 py-3 text-left font-medium">Created At</th>
-                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">SKU</th>
-                          <th className="border-b border-white/10 px-3 py-3 text-left font-medium">Title</th>
-                          <th className="border-b border-white/10 px-3 py-3 text-right font-medium">Quantity</th>
-                          <th className="border-b border-white/10 px-3 py-3 text-right font-medium">Price</th>
                           <th className="border-b border-white/10 px-3 py-3 text-right font-medium">Subtotal</th>
                           <th className="border-b border-white/10 px-3 py-3 text-left font-medium">
                             Fulfillment Status
@@ -496,7 +501,7 @@ export default function ShopifyPage() {
                       {isLoading && currentRows.length === 0 ? (
                         Array.from({ length: 6 }).map((_, i) => (
                           <tr key={i} className="animate-pulse odd:bg-white/[0.02]">
-                            {Array.from({ length: productMode ? 9 : 8 }).map((__, j) => (
+                            {Array.from({ length: productMode ? 9 : 4 }).map((__, j) => (
                               <td key={j} className="border-b border-white/5 px-3 py-3">
                                 <div className="h-3 rounded bg-white/10" />
                               </td>
@@ -505,14 +510,14 @@ export default function ShopifyPage() {
                         ))
                       ) : currentRows.length === 0 ? (
                         <tr>
-                          <td colSpan={productMode ? 9 : 8} className="px-3 py-8 text-center text-slate-400">
+                          <td colSpan={productMode ? 9 : 4} className="px-3 py-8 text-center text-slate-400">
                             {debouncedSearch.length > 0
                               ? productMode
                                 ? "No Shopify variants match this search."
-                                : "No Shopify order items match this search."
+                                : "No Shopify orders match this search."
                               : productMode
                                 ? "No Shopify variants yet. Click \"Run Shopify Sync\" to ingest data from Shopify."
-                                : "No Shopify order items yet. Click \"Run Shopify Sync\" to ingest data from Shopify."}
+                                : "No Shopify orders yet. Click \"Run Shopify Sync\" to ingest data from Shopify."}
                           </td>
                         </tr>
                       ) : (
@@ -552,36 +557,71 @@ export default function ShopifyPage() {
                                 </td>
                               </tr>
                             ))
-                          : orderItems.map((item) => (
-                              <tr key={item.id} className="odd:bg-white/[0.02] hover:bg-sky-500/10">
-                                <td className="border-b border-white/5 px-3 py-2 font-mono text-xs text-slate-100">
-                                  {item.order_number || "—"}
-                                </td>
-                                <td className="border-b border-white/5 px-3 py-2 text-slate-300">
-                                  {formatDateTime(item.created_at)}
-                                </td>
-                                <td className="border-b border-white/5 px-3 py-2 font-mono text-xs text-slate-100">
-                                  {item.sku || "—"}
-                                </td>
-                                <td className="border-b border-white/5 px-3 py-2 text-slate-200">
-                                  <p className="max-w-[260px] truncate" title={item.title}>
-                                    {item.title || "—"}
-                                  </p>
-                                </td>
-                                <td className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200">
-                                  {formatNumber(item.quantity)}
-                                </td>
-                                <td className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200">
-                                  {formatPrice(item.price)}
-                                </td>
-                                <td className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200">
-                                  {formatPrice(item.subtotal)}
-                                </td>
-                                <td className="border-b border-white/5 px-3 py-2 text-slate-200">
-                                  {item.fulfillment_status || "—"}
-                                </td>
-                              </tr>
-                            ))
+                          : orderItems.map((item) => {
+                              const expanded = expandedOrderId === item.id;
+                              return (
+                                <Fragment key={item.id}>
+                                  <tr className="odd:bg-white/[0.02] hover:bg-sky-500/10">
+                                    <td className="border-b border-white/5 px-3 py-2 font-mono text-xs text-slate-100">
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleOrderExpanded(item.id)}
+                                        className="inline-flex items-center gap-2 rounded px-1 py-0.5 hover:bg-white/10"
+                                        aria-expanded={expanded}
+                                      >
+                                        <span className="text-slate-400">{expanded ? "▾" : "▸"}</span>
+                                        {item.order_number || "—"}
+                                      </button>
+                                    </td>
+                                    <td className="border-b border-white/5 px-3 py-2 text-slate-300">
+                                      {formatDateTime(item.created_at)}
+                                    </td>
+                                    <td className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200">
+                                      {formatPrice(item.subtotal)}
+                                    </td>
+                                    <td className="border-b border-white/5 px-3 py-2 text-slate-200">
+                                      {item.fulfillment_status || "—"}
+                                    </td>
+                                  </tr>
+                                  {expanded ? (
+                                    <tr className="bg-slate-950/40">
+                                      <td colSpan={4} className="border-b border-white/5 px-5 py-3">
+                                        <table className="w-full text-sm">
+                                          <thead className="text-xs uppercase tracking-wide text-slate-400">
+                                            <tr>
+                                              <th className="px-2 py-1 text-left font-medium">SKU</th>
+                                              <th className="px-2 py-1 text-left font-medium">Title</th>
+                                              <th className="px-2 py-1 text-right font-medium">Quantity</th>
+                                              <th className="px-2 py-1 text-right font-medium">Price</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {item.line_items.map((line) => (
+                                              <tr key={line.id} className="odd:bg-white/[0.02]">
+                                                <td className="px-2 py-1.5 font-mono text-xs text-slate-100">
+                                                  {line.sku || "—"}
+                                                </td>
+                                                <td className="px-2 py-1.5 text-slate-200">
+                                                  <p className="max-w-[420px] truncate" title={line.title}>
+                                                    {line.title || "—"}
+                                                  </p>
+                                                </td>
+                                                <td className="px-2 py-1.5 text-right tabular-nums text-slate-200">
+                                                  {formatNumber(line.quantity)}
+                                                </td>
+                                                <td className="px-2 py-1.5 text-right tabular-nums text-slate-200">
+                                                  {formatPrice(line.price)}
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </td>
+                                    </tr>
+                                  ) : null}
+                                </Fragment>
+                              );
+                            })
                       )}
                     </tbody>
                   </table>
