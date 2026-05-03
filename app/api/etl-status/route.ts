@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   try {
-    const [latestRun, lastSuccessEtl, snapshotAgg, etlLockRow] = await Promise.all([
+    const [latestRun, lastSuccessEtl, snapshotAgg, activeLockRow] = await Promise.all([
       prisma.etlRun.findFirst({
         orderBy: { startedAt: "desc" },
         select: {
@@ -36,11 +36,16 @@ export async function GET() {
       prisma.stockSnapshot.aggregate({
         _max: { snapshotAt: true, lastModified: true },
       }),
-      prisma.etlLock.findUnique({ where: { id: "singleton" } }).catch(() => null),
+      prisma.etlLock
+        .findFirst({
+          where: { expiresAt: { gt: new Date() } },
+          orderBy: { acquiredAt: "desc" },
+          select: { expiresAt: true },
+        })
+        .catch(() => null),
     ]);
 
-    const isRunning =
-      etlLockRow !== null && new Date(etlLockRow.expiresAt) > new Date();
+    const isRunning = activeLockRow !== null;
 
     const lastEtlSuccessAt = lastSuccessEtl?.finishedAt ?? null;
     const dataLastWrittenAt = snapshotAgg._max.snapshotAt ?? null;
