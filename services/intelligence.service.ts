@@ -584,6 +584,7 @@ export async function getOosRiskPaginated(
     SELECT COUNT(*)::int AS total
     FROM "OosRiskRow" orr
     WHERE orr."abcClass" = 'A'
+      AND orr."availableQty" != 0
     ${whereSql}
   `);
 
@@ -599,6 +600,7 @@ export async function getOosRiskPaginated(
       orr."units90d" AS units_90d
     FROM "OosRiskRow" orr
     WHERE orr."abcClass" = 'A'
+      AND orr."availableQty" != 0
     ${whereSql}
     ORDER BY orr."availableQty" ASC, orr."demandScore" DESC, orr."abcClass" ASC
     LIMIT ${pageSize}
