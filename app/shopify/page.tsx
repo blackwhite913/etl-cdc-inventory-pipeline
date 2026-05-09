@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState, useTransition } from "react";
 
-import { runShopifyEtlAction } from "./actions";
+import { resetStuckShopifyJobAction, runShopifyEtlAction } from "./actions";
 
 const PAGE_SIZE = 50;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -271,6 +271,16 @@ export default function ShopifyPage() {
     });
   };
 
+  const handleResetStuckJob = useCallback(async () => {
+    try {
+      const result = await resetStuckShopifyJobAction();
+      setEtlBanner({ type: "info", message: result.message });
+      void pollShopifyStatus();
+    } catch {
+      setEtlBanner({ type: "error", message: "Failed to clear stuck job" });
+    }
+  }, [pollShopifyStatus]);
+
   const openSchema = useCallback(() => {
     const tables = viewMode === "products" ? "shopify" : "shopify_orders";
     setSchemaOpen(true);
@@ -408,6 +418,16 @@ export default function ShopifyPage() {
                 "Run Shopify Sync"
               )}
             </button>
+            {etlIsRunning ? (
+              <button
+                type="button"
+                onClick={() => void handleResetStuckJob()}
+                className="self-start rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-1.5 text-sm text-amber-200 transition hover:bg-amber-500/20 sm:self-auto"
+                title="Clear a stuck running job from the database"
+              >
+                Clear Stuck Job
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={openSchema}
