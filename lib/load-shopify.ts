@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 
 import type { ShopifyProductRaw, ShopifyVariantRaw } from "@/lib/extract-shopify";
 
-const SHOPIFY_TRANSACTION_BATCH = 50;
+const UPDATE_CONCURRENCY = 50;
 
 type ShopifyVariantInput = {
   id: string;
@@ -110,27 +110,28 @@ export async function loadShopifyBatch(products: ShopifyProductRaw[]): Promise<S
   });
 
   const existingSet = new Set(existing.map((row) => row.id));
+  const toInsert = normalized.filter((row) => !existingSet.has(row.id));
+  const toUpdate = normalized.filter((row) => existingSet.has(row.id));
 
-  let processed = 0;
-
-  // ✅ FIX: NO TRANSACTION — simple, stable upserts
-  for (const row of normalized) {
-    await prisma.shopifyVariant.upsert({
-      where: { id: row.id },
-      create: row,
-      update: row,
-    });
-    processed += 1;
+  // Single batch INSERT for all new variants
+  if (toInsert.length > 0) {
+    await prisma.shopifyVariant.createMany({ data: toInsert, skipDuplicates: true });
   }
 
-  const inserted = normalized.filter((row) => !existingSet.has(row.id)).length;
+  // Parallel updates in chunks — avoids N sequential roundtrips
+  for (let i = 0; i < toUpdate.length; i += UPDATE_CONCURRENCY) {
+    const batch = toUpdate.slice(i, i + UPDATE_CONCURRENCY);
+    await Promise.all(
+      batch.map((row) => prisma.shopifyVariant.update({ where: { id: row.id }, data: row })),
+    );
+  }
 
   return {
     productsProcessed: products.length,
     variantsSeen,
-    processed,
-    inserted,
-    updated: processed - inserted,
+    processed: normalized.length,
+    inserted: toInsert.length,
+    updated: toUpdate.length,
     fallbackSkusApplied,
     skippedNullSkus: 0,
     durationMs: Date.now() - t0,
