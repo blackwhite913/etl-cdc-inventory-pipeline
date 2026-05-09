@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 
 import { extractAllShopify } from "@/lib/extract-shopify";
 import { extractAllShopifyOrders } from "@/lib/extract-shopify-orders";
+import { acquireEtlLock, releaseEtlLock } from "@/lib/etl-lock";
 import { loadShopifyBatch } from "@/lib/load-shopify";
 import { loadShopifyOrdersBatch } from "@/lib/load-shopify-orders";
 import { log } from "@/lib/logger";
@@ -10,6 +11,7 @@ import { prisma } from "@/lib/prisma";
 const JOB_NAME = "shopify_etl";
 const DATASET_NAME = "shopify";
 const ORDERS_DATASET_NAME = "shopify_orders";
+const STALE_RUNNING_MS = 20 * 60 * 1000;
 
 export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 200;
@@ -271,7 +273,10 @@ export async function getShopifyStatus(): Promise<ShopifyStatusResult> {
     `,
   ]);
 
-  const isRunning = lastRun?.status === "RUNNING";
+  const isRunning =
+    lastRun?.status === "RUNNING" &&
+    lastRun.startedAt != null &&
+    Date.now() - lastRun.startedAt.getTime() < STALE_RUNNING_MS;
   const lastSyncedAt =
     (lastRun?.status === "SUCCESS" ? lastRun.finishedAt : null) ?? dataset?.lastUpdatedAt ?? null;
   const rowCount = dataset?.rowCount ?? 0;
@@ -311,6 +316,34 @@ export async function getShopifyStatus(): Promise<ShopifyStatusResult> {
 
 export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise<ShopifyEtlSummary> {
   const t0 = Date.now();
+
+  const lockResult = await acquireEtlLock(JOB_NAME);
+  if (!lockResult.acquired) {
+    log("SHOPIFY_SYNC", "info", { event: "skipped", reason: "lock_active" });
+    return {
+      runId: null,
+      mode: null,
+      status: "SKIPPED_LOCKED",
+      recordsProcessed: 0,
+      inserted: 0,
+      updated: 0,
+      productsFetched: 0,
+      variantsStored: 0,
+      skippedNullSkus: 0,
+      fetchTimeMs: 0,
+      loadTimeMs: 0,
+      totalTimeMs: Date.now() - t0,
+      cdcCursorUsed: null,
+      latestLastModifiedSeen: null,
+      apiVariantsFetched: 0,
+      variantsExcludedByActiveFilter: 0,
+      statusBreakdown: {},
+      dbRowCount: 0,
+      ordersProcessed: 0,
+      itemsProcessed: 0,
+    };
+  }
+
   let runId: string | null = null;
   let mode: ShopifyEtlMode | null = null;
   let cdcCursorUsed: Date | null = null;
@@ -552,5 +585,7 @@ export async function runShopifyEtl(options: RunShopifyEtlOptions = {}): Promise
       itemsProcessed,
       errorMessage,
     };
+  } finally {
+    await releaseEtlLock(JOB_NAME);
   }
 }
