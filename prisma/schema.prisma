@@ -170,6 +170,22 @@ model ShopifySalesRow {
   @@index([units30d])
 }
 
+model OosRiskRow {
+  sku          String   @id
+  description  String?
+  abcClass     String
+  demandScore  Float
+  availableQty Int
+  units7d      Int
+  units30d     Int
+  units90d     Int
+  revenue90d   Float
+  updatedAt    DateTime @updatedAt
+
+  @@index([abcClass])
+  @@index([availableQty])
+}
+
 model EtlMetadata {
   jobName   String   @id
   lastRunAt DateTime?

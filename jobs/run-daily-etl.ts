@@ -1,7 +1,7 @@
 import { acquireEtlLock, releaseEtlLock } from "@/lib/etl-lock";
 import { log } from "@/lib/logger";
 import { runBomEtl } from "@/services/bom.service";
-import { refreshShopStock, refreshShopifySales } from "@/services/intelligence.service";
+import { refreshShopStock, refreshShopifySales, refreshOosRisk } from "@/services/intelligence.service";
 import { runShopifyEtl } from "@/services/shopify.service";
 
 async function main() {
@@ -74,10 +74,12 @@ async function main() {
           refreshShopStock(),
           refreshShopifySales(),
         ]);
+        const oosRiskSummary = await refreshOosRisk();
         log("DAILY_ETL", "info", {
           event: "INTELLIGENCE_REFRESH_DONE",
           shopStock: shopStockSummary,
           shopifySales: shopifySalesSummary,
+          oosRisk: oosRiskSummary,
         });
       } catch (error) {
         hadFailure = true;
