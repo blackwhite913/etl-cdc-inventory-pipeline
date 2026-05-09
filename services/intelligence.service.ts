@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 
 const DATASET_NAME = "shop_stock";
 const SHOPIFY_SALES_DATASET_NAME = "shopify_sales";
+const OOS_RISK_DATASET_NAME = "oos_risk";
 export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 200;
 
@@ -412,6 +413,203 @@ export async function refreshShopifySales(): Promise<ShopifySalesRefreshResult> 
   return {
     rowCount,
     refreshedAt: now.toISOString(),
+  };
+}
+
+export type OosRiskPageParams = {
+  page: number;
+  pageSize: number;
+  search?: string;
+};
+
+type OosRiskTableRow = {
+  sku: string;
+  description: string | null;
+  abc_class: string;
+  demand_score: number;
+  available_qty: number;
+  units_7d: number;
+  units_30d: number;
+  units_90d: number;
+};
+
+export type OosRiskPaginatedResult = {
+  total: number;
+  page: number;
+  pageSize: number;
+  items: OosRiskTableRow[];
+};
+
+export type OosRiskRefreshResult = {
+  rowCount: number;
+  refreshedAt: string;
+};
+
+function buildOosRiskWhere(search: string): Prisma.Sql {
+  if (search.length === 0) {
+    return Prisma.sql``;
+  }
+  const searchLike = `%${search}%`;
+  return Prisma.sql`
+    AND (
+      COALESCE(orr."sku", '') ILIKE ${searchLike}
+      OR COALESCE(orr."description", '') ILIKE ${searchLike}
+    )
+  `;
+}
+
+export async function refreshOosRisk(): Promise<OosRiskRefreshResult> {
+  const startedAt = Date.now();
+  log("INTELLIGENCE_REFRESH_OOS_RISK", "info", { event: "start" });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw(Prisma.sql`DELETE FROM "OosRiskRow"`);
+
+    await tx.$executeRaw(Prisma.sql`
+      INSERT INTO "OosRiskRow" (
+        "sku",
+        "description",
+        "abcClass",
+        "demandScore",
+        "availableQty",
+        "units7d",
+        "units30d",
+        "units90d",
+        "revenue90d",
+        "updatedAt"
+      )
+      WITH base AS (
+        SELECT
+          ssr."sku",
+          ssr."description",
+          ssr."units7d"::int AS units7d,
+          ssr."units30d"::int AS units30d,
+          ssr."units90d"::int AS units90d,
+          ssr."revenue90d"::float AS revenue90d,
+          COALESCE(SUM(ss."availableQty"), 0)::int AS available_qty
+        FROM "ShopifySalesRow" ssr
+        LEFT JOIN "StockSnapshot" ss
+          ON ss."productCode" = ssr."sku"
+        GROUP BY ssr."sku", ssr."description", ssr."units7d", ssr."units30d", ssr."units90d", ssr."revenue90d"
+      ),
+      abc AS (
+        SELECT
+          sku,
+          SUM(revenue90d) OVER () AS total_rev,
+          SUM(revenue90d) OVER (ORDER BY revenue90d DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_rev
+        FROM base
+      ),
+      abc_classed AS (
+        SELECT
+          sku,
+          CASE
+            WHEN total_rev = 0 THEN 'C'
+            WHEN cum_rev / total_rev <= 0.80 THEN 'A'
+            WHEN cum_rev / total_rev <= 0.95 THEN 'B'
+            ELSE 'C'
+          END AS abc_class
+        FROM abc
+      ),
+      norm AS (
+        SELECT
+          sku,
+          CASE
+            WHEN MAX(units7d) OVER () = MIN(units7d) OVER () THEN 0.0
+            ELSE (units7d - MIN(units7d) OVER ())::float / (MAX(units7d) OVER () - MIN(units7d) OVER ())
+          END AS norm7d,
+          CASE
+            WHEN MAX(units30d) OVER () = MIN(units30d) OVER () THEN 0.0
+            ELSE (units30d - MIN(units30d) OVER ())::float / (MAX(units30d) OVER () - MIN(units30d) OVER ())
+          END AS norm30d,
+          CASE
+            WHEN MAX(units90d) OVER () = MIN(units90d) OVER () THEN 0.0
+            ELSE (units90d - MIN(units90d) OVER ())::float / (MAX(units90d) OVER () - MIN(units90d) OVER ())
+          END AS norm90d
+        FROM base
+      )
+      SELECT
+        b.sku,
+        b.description,
+        ac.abc_class,
+        ROUND(
+          (COALESCE(n.norm7d, 0) * 0.5 + COALESCE(n.norm30d, 0) * 0.3 + COALESCE(n.norm90d, 0) * 0.2)::numeric,
+          4
+        )::float AS demand_score,
+        b.available_qty,
+        b.units7d,
+        b.units30d,
+        b.units90d,
+        b.revenue90d,
+        NOW()
+      FROM base b
+      JOIN abc_classed ac ON ac.sku = b.sku
+      JOIN norm n ON n.sku = b.sku
+    `);
+  });
+
+  const rowCountRows = await prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+    SELECT COUNT(*)::int AS total FROM "OosRiskRow"
+  `);
+
+  const rowCount = rowCountRows[0]?.total ?? 0;
+  const now = new Date();
+  await prisma.datasetStatus.upsert({
+    where: { datasetName: OOS_RISK_DATASET_NAME },
+    create: { datasetName: OOS_RISK_DATASET_NAME, lastUpdatedAt: now, rowCount },
+    update: { lastUpdatedAt: now, rowCount },
+  });
+
+  log("INTELLIGENCE_REFRESH_OOS_RISK", "info", {
+    event: "end",
+    rowCount,
+    totalTimeMs: Date.now() - startedAt,
+  });
+
+  return {
+    rowCount,
+    refreshedAt: now.toISOString(),
+  };
+}
+
+export async function getOosRiskPaginated(
+  params: OosRiskPageParams,
+): Promise<OosRiskPaginatedResult> {
+  const page = Math.max(1, params.page);
+  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, params.pageSize));
+  const skip = (page - 1) * pageSize;
+  const search = (params.search ?? "").trim();
+  const whereSql = buildOosRiskWhere(search);
+
+  const countRows = await prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+    SELECT COUNT(*)::int AS total
+    FROM "OosRiskRow" orr
+    WHERE orr."abcClass" = 'A'
+    ${whereSql}
+  `);
+
+  const rows = await prisma.$queryRaw<OosRiskTableRow[]>(Prisma.sql`
+    SELECT
+      orr."sku" AS sku,
+      orr."description" AS description,
+      orr."abcClass" AS abc_class,
+      orr."demandScore" AS demand_score,
+      orr."availableQty" AS available_qty,
+      orr."units7d" AS units_7d,
+      orr."units30d" AS units_30d,
+      orr."units90d" AS units_90d
+    FROM "OosRiskRow" orr
+    WHERE orr."abcClass" = 'A'
+    ${whereSql}
+    ORDER BY orr."availableQty" ASC, orr."demandScore" DESC, orr."abcClass" ASC
+    LIMIT ${pageSize}
+    OFFSET ${skip}
+  `);
+
+  return {
+    total: countRows[0]?.total ?? 0,
+    page,
+    pageSize,
+    items: rows,
   };
 }
 
