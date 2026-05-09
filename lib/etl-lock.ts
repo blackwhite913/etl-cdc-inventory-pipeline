@@ -5,6 +5,7 @@ const MINUTE_MS = 60 * 1000;
 const DEFAULT_LOCK_TTL_MS = 10 * MINUTE_MS; // fallback
 const STOCK_ETL_LOCK_TTL_MS = 10 * MINUTE_MS;
 const DAILY_ETL_LOCK_TTL_MS = 30 * MINUTE_MS;
+const SHOPIFY_ETL_LOCK_TTL_MS = 30 * MINUTE_MS;
 const ETL_LOCK_TABLE = "EtlLock";
 
 type AcquireResult =
@@ -32,6 +33,9 @@ function getLockTtlMs(jobName: string): number {
   }
   if (jobName === "daily-etl") {
     return parsePositiveMs(process.env.DAILY_ETL_LOCK_TTL_MS) ?? DAILY_ETL_LOCK_TTL_MS;
+  }
+  if (jobName === "shopify_etl") {
+    return parsePositiveMs(process.env.SHOPIFY_ETL_LOCK_TTL_MS) ?? SHOPIFY_ETL_LOCK_TTL_MS;
   }
   return parsePositiveMs(process.env.ETL_LOCK_TTL_MS) ?? DEFAULT_LOCK_TTL_MS;
 }

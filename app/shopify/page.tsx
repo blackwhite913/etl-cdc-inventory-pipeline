@@ -245,27 +245,17 @@ export default function ShopifyPage() {
     setEtlBanner(null);
     startTransition(async () => {
       try {
-        const summary = await runShopifyEtlAction();
-        if (summary.status === "SKIPPED_LOCKED") {
-          setEtlBanner({ type: "info", message: "Sync already in progress (started recently)" });
-        } else if (summary.status === "FAILED") {
-          setEtlBanner({
-            type: "error",
-            message: `Shopify sync failed: ${summary.errorMessage ?? "unknown error"}`,
-          });
-        } else {
-          setEtlBanner({
-            type: "success",
-            message: `Shopify sync complete — ${summary.productsFetched} products, ${summary.variantsStored} variants, ${summary.ordersProcessed} paid orders, ${summary.itemsProcessed} order items.`,
-          });
-        }
+        const result = await runShopifyEtlAction();
+        setEtlBanner({
+          type: result.status === "ALREADY_RUNNING" ? "info" : "success",
+          message: result.message,
+        });
       } catch (err) {
         setEtlBanner({
           type: "error",
-          message: err instanceof Error ? err.message : "Shopify sync action failed",
+          message: err instanceof Error ? err.message : "Failed to start Shopify sync",
         });
       } finally {
-        void loadPage(currentPage, { silent: true });
         void pollShopifyStatus();
       }
     });

@@ -11,7 +11,7 @@ import { prisma } from "@/lib/prisma";
 const JOB_NAME = "shopify_etl";
 const DATASET_NAME = "shopify";
 const ORDERS_DATASET_NAME = "shopify_orders";
-const STALE_RUNNING_MS = 20 * 60 * 1000;
+const STALE_RUNNING_MS = 30 * 60 * 1000;
 
 export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 200;
@@ -237,7 +237,36 @@ export async function getShopifyOrdersGrouped(
   return { total, page, pageSize, items };
 }
 
+async function reapStaleShopifyRuns(): Promise<void> {
+  const cutoff = new Date(Date.now() - STALE_RUNNING_MS);
+  try {
+    const result = await prisma.etlRun.updateMany({
+      where: {
+        status: "RUNNING",
+        mode: { in: ["SHOPIFY_FULL", "SHOPIFY_CDC"] },
+        startedAt: { lt: cutoff },
+      },
+      data: {
+        status: "FAILED",
+        finishedAt: new Date(),
+        errorMessage: `Auto-reaped: still RUNNING after ${Math.round(STALE_RUNNING_MS / 60000)} minutes`,
+      },
+    });
+    if (result.count > 0) {
+      log("SHOPIFY_SYNC", "warn", { event: "stale_runs_reaped", count: result.count });
+      await releaseEtlLock(JOB_NAME);
+    }
+  } catch (err) {
+    log("SHOPIFY_SYNC", "error", {
+      event: "stale_runs_reap_failed",
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 export async function getShopifyStatus(): Promise<ShopifyStatusResult> {
+  await reapStaleShopifyRuns();
+
   const [lastRun, dataset, statusCounts, nullOrFallbackSkuStats, duplicateSkuStats] = await Promise.all([
     prisma.etlRun.findFirst({
       where: {
