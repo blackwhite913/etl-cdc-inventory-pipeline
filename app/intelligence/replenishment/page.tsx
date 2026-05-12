@@ -354,7 +354,7 @@ export default function ReplenishmentPage() {
                           className="border-b border-white/10 px-3 py-3 text-right font-medium"
                           title={DEMAND_FORMULA}
                         >
-                          Daily Demand (d)
+                          Daily Demand (units/day)
                         </th>
                         <th className="border-b border-white/10 px-3 py-3 text-right font-medium">7D Units</th>
                         <th className="border-b border-white/10 px-3 py-3 text-left font-medium">Lead Time</th>
@@ -409,7 +409,7 @@ export default function ReplenishmentPage() {
                               className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200"
                               title={DEMAND_FORMULA}
                             >
-                              {item.daily_demand.toFixed(2)}
+                              {Math.round(item.daily_demand)}
                             </td>
                             <td className="border-b border-white/5 px-3 py-2 text-right tabular-nums text-slate-200">
                               {item.units_7d.toLocaleString()}
