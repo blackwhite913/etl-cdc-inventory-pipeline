@@ -334,7 +334,7 @@ export function calculateReorderPoints(
     }
 
     const rop = Math.ceil(d * L);
-    const gap = rop - availableQty;
+    const gap = rop - availableQty - onPurchase;
 
     results.push({
       sku,
