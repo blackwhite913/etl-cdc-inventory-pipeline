@@ -410,6 +410,19 @@ export async function refreshShopifySales(): Promise<ShopifySalesRefreshResult> 
     totalTimeMs: Date.now() - startedAt,
   });
 
+  // Replenishment depends on ShopifySalesRow — keep the derived ROP table in
+  // sync. Failure here is non-fatal: log + swallow so the caller (which only
+  // owns the Shopify Sales refresh contract) still sees success.
+  try {
+    const { refreshReplenishment } = await import("@/services/replenishment.service");
+    await refreshReplenishment();
+  } catch (err) {
+    log("INTELLIGENCE_REFRESH_SHOPIFY_SALES", "error", {
+      event: "replenishment_refresh_failed",
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   return {
     rowCount,
     refreshedAt: now.toISOString(),

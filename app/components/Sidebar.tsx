@@ -30,6 +30,7 @@ const intelligenceSections: NavSection[] = [
       { label: "Shop Stock", href: "/intelligence/shop-stock" },
       { label: "Shopify Sales", href: "/intelligence/shopify-sales" },
       { label: "OOS Risk", href: "/intelligence/oos-risk" },
+      { label: "Replenishment", href: "/intelligence/replenishment" },
     ],
   },
 ];

@@ -2,6 +2,7 @@ import { acquireEtlLock, releaseEtlLock } from "@/lib/etl-lock";
 import { log } from "@/lib/logger";
 import { runBomEtl } from "@/services/bom.service";
 import { refreshShopStock, refreshShopifySales, refreshOosRisk } from "@/services/intelligence.service";
+import { runPoEtl } from "@/services/replenishment.service";
 import { runShopifyEtl } from "@/services/shopify.service";
 
 async function main() {
@@ -63,6 +64,24 @@ async function main() {
       hadFailure = true;
       log("DAILY_ETL", "error", {
         event: "SHOPIFY_FAILED",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // PO ETL — independent of BOM/Shopify cursors, uses its own EtlMetadata
+    // (po_etl) cursor. CDC after the first full load: only modified POs are
+    // fetched and merged into SkuPoIndex by poNumber. Must run BEFORE the
+    // intelligence refresh because refreshShopifySales triggers
+    // refreshReplenishment, which reads SkuPoIndex.
+    log("DAILY_ETL", "info", { event: "PO_ETL_START" });
+    try {
+      const poSummary = await runPoEtl();
+      hasUpstreamChanges ||= poSummary.skusAffected > 0;
+      log("DAILY_ETL", "info", { event: "PO_ETL_END", ...poSummary });
+    } catch (error) {
+      hadFailure = true;
+      log("DAILY_ETL", "error", {
+        event: "PO_ETL_FAILED",
         error: error instanceof Error ? error.message : String(error),
       });
     }

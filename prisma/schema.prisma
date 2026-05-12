@@ -186,6 +186,42 @@ model OosRiskRow {
   @@index([availableQty])
 }
 
+model SkuPoIndex {
+  sku       String   @id
+  pos       Json
+  updatedAt DateTime @updatedAt
+}
+
+model UserLeadTime {
+  sku          String   @id
+  leadTimeDays Int
+  updatedAt    DateTime @updatedAt
+}
+
+model ReplenishmentRow {
+  sku             String   @id
+  description     String?
+  availableQty    Int
+  onPurchase      Int      @default(0)
+  dailyDemand     Float
+  leadTimeDays    Int
+  reorderPoint    Int
+  gap             Int
+  needsReorder    Boolean
+  supplierCode    String?
+  supplierName    String?
+  supplierChanged Boolean
+  leadTimeSource  String
+  units7d         Int
+  units30d        Int
+  units90d        Int
+  updatedAt       DateTime @updatedAt
+
+  @@index([needsReorder])
+  @@index([gap])
+  @@index([onPurchase])
+}
+
 model EtlMetadata {
   jobName   String   @id
   lastRunAt DateTime?

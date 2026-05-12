@@ -16,6 +16,7 @@
     "etl:daily": "tsx jobs/run-daily-etl.ts",
     "etl:stock": "tsx jobs/run-stock-etl.ts",
     "sandbox:shopify-sales": "dotenv -e .env -e .env.local -- node scripts/sandbox-shopify-sales.mjs",
+    "debug:replenishment": "dotenv -e .env -e .env.local -- tsx scripts/debug-replenishment.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
