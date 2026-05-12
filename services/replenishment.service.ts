@@ -518,7 +518,6 @@ type ShopStockSourceRow = {
   units7d: number;
   units30d: number;
   units90d: number;
-  has_stock_snapshot: boolean;
   has_sales: boolean;
 };
 
@@ -552,8 +551,8 @@ export async function refreshReplenishment(): Promise<ReplenishmentRefreshResult
   );
 
   // 3) Pull Shop Stock COMPONENTs (sellable Shopify SKUs that are not the
-  //    productCode of any BomHeader). LEFT JOIN stock so SKUs without a
-  //    StockSnapshot row are surfaced (with availableQty=0) and logged.
+  //    productCode of any BomHeader). INNER JOIN stock so SKUs absent from
+  //    Unleashed (no StockSnapshot row) are excluded from replenishment.
   const sourceRows = await prisma.$queryRaw<ShopStockSourceRow[]>`
     WITH components AS (
       SELECT DISTINCT TRIM(sv."sku") AS sku
@@ -589,23 +588,19 @@ export async function refreshReplenishment(): Promise<ReplenishmentRefreshResult
       COALESCE(ssr."units7d", 0)::int AS "units7d",
       COALESCE(ssr."units30d", 0)::int AS "units30d",
       COALESCE(ssr."units90d", 0)::int AS "units90d",
-      (s.sku IS NOT NULL) AS has_stock_snapshot,
       (ssr."sku" IS NOT NULL) AS has_sales
     FROM components c
-    LEFT JOIN stock_agg s ON s.sku = c.sku
+    INNER JOIN stock_agg s ON s.sku = c.sku
     LEFT JOIN variant_titles v ON v.sku = c.sku
     LEFT JOIN "ShopifySalesRow" ssr ON ssr."sku" = c.sku
   `;
 
-  // Diagnostics: count + warn on unmapped SKUs.
   let withSales = 0;
   let withoutSales = 0;
-  const unmappedStock: string[] = [];
 
   for (const row of sourceRows) {
     if (row.has_sales) withSales++;
     else withoutSales++;
-    if (!row.has_stock_snapshot) unmappedStock.push(row.sku);
   }
 
   log("REPLENISHMENT", "info", {
@@ -613,12 +608,7 @@ export async function refreshReplenishment(): Promise<ReplenishmentRefreshResult
     totalComponents: sourceRows.length,
     withSales,
     withoutSales,
-    unmappedStockCount: unmappedStock.length,
   });
-
-  for (const sku of unmappedStock) {
-    console.warn(`⚠️  SKU not in StockSnapshot: ${sku} — included with availableQty=0`);
-  }
 
   const salesRows: SalesRow[] = sourceRows.map((r) => ({
     sku: r.sku,
