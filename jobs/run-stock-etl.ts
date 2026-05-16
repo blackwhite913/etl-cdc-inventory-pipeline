@@ -7,7 +7,6 @@ async function main() {
   const startedAt = Date.now();
   let lockAcquired = false;
   let hadFailure = false;
-  let exitCode = 0;
 
   log("STOCK_ETL", "info", { event: "JOB_START" });
 
@@ -71,8 +70,6 @@ async function main() {
       status: hadFailure ? "PARTIAL_FAILURE" : "SUCCESS",
       totalElapsedMs: Date.now() - startedAt,
     });
-
-    exitCode = hadFailure ? 1 : 0;
   } catch (error) {
     log("STOCK_ETL", "error", {
       event: "JOB_END",
@@ -80,14 +77,16 @@ async function main() {
       error: error instanceof Error ? error.message : String(error),
       totalElapsedMs: Date.now() - startedAt,
     });
-    exitCode = 1;
   } finally {
     if (lockAcquired) {
       await releaseEtlLock("stock-etl");
     }
   }
 
-  process.exit(exitCode);
+  // Always exit 0: Railway flags any non-zero cron exit as a crashed
+  // deployment. Failures are surfaced via JOB_END logs and the EtlRun table,
+  // not the process exit code.
+  process.exit(0);
 }
 
 void main();

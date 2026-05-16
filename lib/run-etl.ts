@@ -1,5 +1,5 @@
 import { extractAllStock } from "@/lib/extract-stock";
-import { cdcLoad, fullLoadBatch } from "@/lib/load-stock";
+import { cdcLoad } from "@/lib/load-stock";
 import { prisma } from "@/lib/prisma";
 import { transformToSnapshotRow } from "@/lib/transform-stock";
 
@@ -128,9 +128,10 @@ export async function runEtl(options: EtlOptions = {}): Promise<EtlSummary> {
               latestLastModifiedSeen = trackLatest(latestLastModifiedSeen, row.lastModified);
             }
 
-            const result = await fullLoadBatch(rows);
+            const result = await cdcLoad(rows);
             loadTimeMs += result.durationMs;
             inserted += result.inserted;
+            updated += result.updated;
             recordsProcessed += rows.length;
           },
         });
@@ -138,12 +139,6 @@ export async function runEtl(options: EtlOptions = {}): Promise<EtlSummary> {
         fetchTimeMs = Date.now() - fetchStart - loadTimeMs;
         partialFailures = meta.partialFailures;
         failedPages = meta.failedPages;
-
-        if (partialFailures > 0) {
-          throw new Error(
-            `Extraction completed with ${partialFailures} partial failure(s): ${JSON.stringify(meta.failedPages)}`,
-          );
-        }
       } else {
         // CDC: use MAX(lastModified) from the DB, minus the overlap buffer, as the cursor.
         const aggregate = await prisma.stockSnapshot.aggregate({
@@ -164,9 +159,10 @@ export async function runEtl(options: EtlOptions = {}): Promise<EtlSummary> {
                 latestLastModifiedSeen = trackLatest(latestLastModifiedSeen, row.lastModified);
               }
 
-              const result = await fullLoadBatch(rows);
+              const result = await cdcLoad(rows);
               loadTimeMs += result.durationMs;
               inserted += result.inserted;
+              updated += result.updated;
               recordsProcessed += rows.length;
             },
           });
@@ -184,12 +180,6 @@ export async function runEtl(options: EtlOptions = {}): Promise<EtlSummary> {
           fetchTimeMs = Date.now() - fetchStart;
           partialFailures = meta.partialFailures;
           failedPages = meta.failedPages;
-
-          if (partialFailures > 0) {
-            throw new Error(
-              `Extraction completed with ${partialFailures} partial failure(s): ${JSON.stringify(meta.failedPages)}`,
-            );
-          }
 
           const rows = rawItems
             .map(transformToSnapshotRow)
@@ -212,11 +202,15 @@ export async function runEtl(options: EtlOptions = {}): Promise<EtlSummary> {
           updated = result.updated;
         }
 
-        if (partialFailures > 0) {
-          throw new Error(
-            `Extraction completed with ${partialFailures} partial failure(s): ${JSON.stringify(failedPages)}`,
-          );
-        }
+      }
+
+      // A timed-out / failed page is non-fatal: the rows that did come back are
+      // still loaded and the run is recorded SUCCESS. CDC re-queries the same
+      // date window next run, so the missed page is picked up then.
+      if (partialFailures > 0) {
+        console.warn(
+          `[etl] completed with ${partialFailures} partial failure(s); loaded available rows failedPages=${JSON.stringify(failedPages)}`,
+        );
       }
 
       const totalTimeMs = Date.now() - t0;

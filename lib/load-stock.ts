@@ -41,30 +41,6 @@ function dedupeByKey(rows: StockSnapshotRow[]): StockSnapshotRow[] {
 }
 
 /**
- * Insert one batch of fresh rows. Used by the streaming full-load path so peak
- * memory is one extraction batch — not the entire dataset.
- */
-export async function fullLoadBatch(rows: StockSnapshotRow[]): Promise<LoadResult> {
-  const t0 = Date.now();
-  if (rows.length === 0) return { inserted: 0, updated: 0, skipped: 0, durationMs: 0 };
-
-  const deduped = dedupeByKey(rows);
-  let inserted = 0;
-  for (const part of chunk(deduped, FULL_LOAD_CHUNK)) {
-    const result = await prisma.stockSnapshot.createMany({
-      data: part,
-      skipDuplicates: true,
-    });
-    inserted += result.count;
-  }
-
-  const skipped = deduped.length - inserted;
-  const durationMs = Date.now() - t0;
-  console.log(`[load] mode=full inserted=${inserted} skipped=${skipped} durationMs=${durationMs}`);
-  return { inserted, updated: 0, skipped, durationMs };
-}
-
-/**
  * CDC load: split incoming rows into inserts/updates by pre-querying existing
  * composite keys, then apply each path in chunked transactions. Returns
  * accurate `inserted`, `updated`, and `skipped` counts.

@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 
 const UNLEASHED_API_BASE_URL = "https://api.unleashedsoftware.com";
-const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
-const DEFAULT_FETCH_RETRIES = 2;
+const DEFAULT_FETCH_TIMEOUT_MS = 45_000;
+const DEFAULT_FETCH_RETRIES = 1;
 
 type UnleashedPagination = {
   NumberOfItems: number;
