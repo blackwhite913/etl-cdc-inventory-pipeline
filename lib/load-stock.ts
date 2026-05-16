@@ -1,9 +1,21 @@
 import { prisma } from "@/lib/prisma";
 import type { StockSnapshotRow } from "@/lib/transform-stock";
 
-const FULL_LOAD_CHUNK = 1000;
 const FIND_EXISTING_CHUNK = 500;
-const UPDATE_TX_CHUNK = 50;
+const UPSERT_CHUNK = 1000;
+
+const INSERT_COLUMNS =
+  '"productCode", "warehouseCode", "description", "productGroup", ' +
+  '"qtyOnHand", "allocatedQty", "availableQty", "onPurchase", ' +
+  '"avgCost", "totalCost", "daysSinceLastSale", "lastModified", "snapshotAt"';
+
+const UPDATE_ASSIGNMENTS =
+  '"description" = EXCLUDED."description", "productGroup" = EXCLUDED."productGroup", ' +
+  '"qtyOnHand" = EXCLUDED."qtyOnHand", "allocatedQty" = EXCLUDED."allocatedQty", ' +
+  '"availableQty" = EXCLUDED."availableQty", "onPurchase" = EXCLUDED."onPurchase", ' +
+  '"avgCost" = EXCLUDED."avgCost", "totalCost" = EXCLUDED."totalCost", ' +
+  '"daysSinceLastSale" = EXCLUDED."daysSinceLastSale", ' +
+  '"lastModified" = EXCLUDED."lastModified", "snapshotAt" = EXCLUDED."snapshotAt"';
 
 export type LoadResult = {
   inserted: number;
@@ -23,8 +35,9 @@ function chunk<T>(items: T[], size: number): T[][] {
 
 function dedupeByKey(rows: StockSnapshotRow[]): StockSnapshotRow[] {
   // Within a single ETL pass the API can return the same (productCode, warehouseCode)
-  // more than once across pages (timing window). createMany skipDuplicates handles
-  // existing-row collisions but does NOT dedupe within `data` itself, so do it here.
+  // more than once across pages. A bulk INSERT … ON CONFLICT cannot touch the same
+  // conflict key twice in one statement, so collapse duplicates here, keeping the
+  // most recently modified copy.
   const seen = new Map<string, StockSnapshotRow>();
   for (const row of rows) {
     const key = `${row.productCode}::${row.warehouseCode}`;
@@ -41,14 +54,11 @@ function dedupeByKey(rows: StockSnapshotRow[]): StockSnapshotRow[] {
 }
 
 /**
- * CDC load: split incoming rows into inserts/updates by pre-querying existing
- * composite keys, then apply each path in chunked transactions. Returns
- * accurate `inserted`, `updated`, and `skipped` counts.
- *
- * NOTE (scaling): at very high row counts the find-then-split pattern adds an
- * extra round trip per chunk. When the dataset grows, swap this for a raw
- * `INSERT … ON CONFLICT (productCode, warehouseCode) DO UPDATE SET …` so the
- * conflict-detection happens server-side in one shot.
+ * Loads stock rows with a bulk `INSERT … ON CONFLICT DO UPDATE` — one statement
+ * per chunk, so a full ~14k-row refresh is a handful of round trips instead of
+ * thousands of single-row updates. A cheap pre-query of existing keys only
+ * classifies rows as insert vs update for accurate `inserted`/`updated` counts;
+ * the write itself upserts every row regardless.
  */
 export async function cdcLoad(rows: StockSnapshotRow[]): Promise<LoadResult> {
   const t0 = Date.now();
@@ -72,54 +82,45 @@ export async function cdcLoad(rows: StockSnapshotRow[]): Promise<LoadResult> {
     }
   }
 
-  const toInsert: StockSnapshotRow[] = [];
-  const toUpdate: StockSnapshotRow[] = [];
+  let inserted = 0;
   for (const row of deduped) {
-    const key = `${row.productCode}::${row.warehouseCode}`;
-    if (existingKeys.has(key)) {
-      toUpdate.push(row);
-    } else {
-      toInsert.push(row);
+    if (!existingKeys.has(`${row.productCode}::${row.warehouseCode}`)) {
+      inserted += 1;
     }
   }
+  const updated = deduped.length - inserted;
 
-  let inserted = 0;
-  for (const part of chunk(toInsert, FULL_LOAD_CHUNK)) {
-    const result = await prisma.stockSnapshot.createMany({
-      data: part,
-      skipDuplicates: true,
-    });
-    inserted += result.count;
-  }
+  for (const part of chunk(deduped, UPSERT_CHUNK)) {
+    const tuples: string[] = [];
+    const params: unknown[] = [];
+    for (const row of part) {
+      const b = params.length;
+      tuples.push(
+        `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, ` +
+          `$${b + 7}, $${b + 8}, $${b + 9}, $${b + 10}, $${b + 11}, $${b + 12}, $${b + 13})`,
+      );
+      params.push(
+        row.productCode,
+        row.warehouseCode,
+        row.description,
+        row.productGroup,
+        row.qtyOnHand,
+        row.allocatedQty,
+        row.availableQty,
+        row.onPurchase,
+        row.avgCost,
+        row.totalCost,
+        row.daysSinceLastSale,
+        row.lastModified,
+        row.snapshotAt,
+      );
+    }
 
-  let updated = 0;
-  for (const part of chunk(toUpdate, UPDATE_TX_CHUNK)) {
-    await prisma.$transaction(
-      part.map((row) =>
-        prisma.stockSnapshot.update({
-          where: {
-            productCode_warehouseCode: {
-              productCode: row.productCode,
-              warehouseCode: row.warehouseCode,
-            },
-          },
-          data: {
-            description: row.description,
-            productGroup: row.productGroup,
-            qtyOnHand: row.qtyOnHand,
-            allocatedQty: row.allocatedQty,
-            availableQty: row.availableQty,
-            onPurchase: row.onPurchase,
-            avgCost: row.avgCost,
-            totalCost: row.totalCost,
-            daysSinceLastSale: row.daysSinceLastSale,
-            lastModified: row.lastModified,
-            snapshotAt: row.snapshotAt,
-          },
-        }),
-      ),
-    );
-    updated += part.length;
+    const sql =
+      `INSERT INTO "StockSnapshot" (${INSERT_COLUMNS}) VALUES ${tuples.join(", ")} ` +
+      `ON CONFLICT ("productCode", "warehouseCode") DO UPDATE SET ${UPDATE_ASSIGNMENTS}`;
+
+    await prisma.$executeRawUnsafe(sql, ...params);
   }
 
   const skipped = rows.length - deduped.length;

@@ -3,9 +3,27 @@ import { log } from "@/lib/logger";
 import { runEtl } from "@/lib/run-etl";
 import { refreshShopStock } from "@/services/intelligence.service";
 
+let lockAcquired = false;
+let shuttingDown = false;
+
+// Railway sends SIGTERM when a deploy supersedes a still-running cron job.
+// Release the lock on the way out, otherwise the row survives until its
+// 10-minute TTL and every run in between skips with SKIPPED_ALREADY_RUNNING.
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log("STOCK_ETL", "warn", { event: "JOB_INTERRUPTED", signal });
+  if (lockAcquired) {
+    await releaseEtlLock("stock-etl");
+  }
+  process.exit(0);
+}
+
+process.once("SIGTERM", (signal) => void shutdown(signal));
+process.once("SIGINT", (signal) => void shutdown(signal));
+
 async function main() {
   const startedAt = Date.now();
-  let lockAcquired = false;
   let hadFailure = false;
 
   log("STOCK_ETL", "info", { event: "JOB_START" });
