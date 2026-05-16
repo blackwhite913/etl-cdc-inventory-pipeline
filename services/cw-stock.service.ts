@@ -20,6 +20,20 @@ const CDC_OVERLAP_MS = 5_000;
 export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 200;
 
+// Unleashed's StockOnHand API returns a row for every product associated with
+// the CW warehouse — most carry zero stock everywhere. Surface only products
+// that actually hold stock, matching Unleashed's own CW warehouse report.
+// Rows are still stored so CDC can update a product back to zero (it then
+// simply drops off this view).
+const HAS_STOCK_WHERE: Prisma.CwStockSnapshotWhereInput = {
+  OR: [
+    { qtyOnHand: { not: 0 } },
+    { allocatedQty: { not: 0 } },
+    { availableQty: { not: 0 } },
+    { onPurchase: { not: 0 } },
+  ],
+};
+
 export type CwStockEtlMode = "CW_FULL" | "CW_CDC";
 export type CwStockEtlStatus = "SUCCESS" | "FAILED";
 
@@ -87,15 +101,20 @@ export async function getCwStockPaginated(
   const skip = (page - 1) * pageSize;
   const search = (params.search ?? "").trim();
 
-  const where: Prisma.CwStockSnapshotWhereInput | undefined =
+  const where: Prisma.CwStockSnapshotWhereInput =
     search.length > 0
       ? {
-          OR: [
-            { productCode: { contains: search, mode: "insensitive" } },
-            { description: { contains: search, mode: "insensitive" } },
+          AND: [
+            HAS_STOCK_WHERE,
+            {
+              OR: [
+                { productCode: { contains: search, mode: "insensitive" } },
+                { description: { contains: search, mode: "insensitive" } },
+              ],
+            },
           ],
         }
-      : undefined;
+      : HAS_STOCK_WHERE;
 
   const [total, rows] = await Promise.all([
     prisma.cwStockSnapshot.count({ where }),
@@ -227,7 +246,8 @@ export async function runCwStockEtl(): Promise<CwStockEtlSummary> {
     }
 
     const now = new Date();
-    const rowCount = await prisma.cwStockSnapshot.count();
+    // Report the in-stock count (what the UI shows), not every zero row.
+    const rowCount = await prisma.cwStockSnapshot.count({ where: HAS_STOCK_WHERE });
     await prisma.datasetStatus.upsert({
       where: { datasetName: DATASET_NAME },
       create: { datasetName: DATASET_NAME, lastUpdatedAt: now, rowCount },
