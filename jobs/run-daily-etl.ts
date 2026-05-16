@@ -1,6 +1,7 @@
 import { acquireEtlLock, releaseEtlLock } from "@/lib/etl-lock";
 import { log } from "@/lib/logger";
 import { runBomEtl } from "@/services/bom.service";
+import { runCwStockEtl } from "@/services/cw-stock.service";
 import { refreshShopStock, refreshShopifySales, refreshOosRisk } from "@/services/intelligence.service";
 import { runPoEtl } from "@/services/replenishment.service";
 import { runShopifyEtl } from "@/services/shopify.service";
@@ -82,6 +83,25 @@ async function main() {
       hadFailure = true;
       log("DAILY_ETL", "error", {
         event: "PO_ETL_FAILED",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // CW Logistics (3PL) stock — independent track with its own table and CDC
+    // cursor. Runs once a day here, never on the 2-minute U10/U3 cadence.
+    log("DAILY_ETL", "info", { event: "CW_STOCK_START" });
+    try {
+      const cwSummary = await runCwStockEtl();
+      const cwFailed = cwSummary.status === "FAILED";
+      hadFailure ||= cwFailed;
+      log("DAILY_ETL", cwFailed ? "error" : "info", {
+        event: cwFailed ? "CW_STOCK_FAILED" : "CW_STOCK_END",
+        ...cwSummary,
+      });
+    } catch (error) {
+      hadFailure = true;
+      log("DAILY_ETL", "error", {
+        event: "CW_STOCK_FAILED",
         error: error instanceof Error ? error.message : String(error),
       });
     }

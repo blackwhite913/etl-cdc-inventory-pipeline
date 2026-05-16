@@ -24,6 +24,31 @@ export type LoadResult = {
   durationMs: number;
 };
 
+/**
+ * The Prisma snapshot table to load into. `StockSnapshot` and `CwStockSnapshot`
+ * have identical columns, so the same bulk-upsert path serves both — only the
+ * SQL table name and the existing-key lookup delegate differ.
+ */
+export type StockLoadTarget = {
+  tableName: "StockSnapshot" | "CwStockSnapshot";
+  delegate: {
+    findMany(args: {
+      where: { OR: Array<{ productCode: string; warehouseCode: string }> };
+      select: { productCode: true; warehouseCode: true };
+    }): Promise<Array<{ productCode: string; warehouseCode: string }>>;
+  };
+};
+
+const DEFAULT_TARGET: StockLoadTarget = {
+  tableName: "StockSnapshot",
+  delegate: prisma.stockSnapshot,
+};
+
+export const CW_STOCK_TARGET: StockLoadTarget = {
+  tableName: "CwStockSnapshot",
+  delegate: prisma.cwStockSnapshot,
+};
+
 function chunk<T>(items: T[], size: number): T[][] {
   if (items.length === 0) return [];
   const out: T[][] = [];
@@ -60,7 +85,10 @@ function dedupeByKey(rows: StockSnapshotRow[]): StockSnapshotRow[] {
  * classifies rows as insert vs update for accurate `inserted`/`updated` counts;
  * the write itself upserts every row regardless.
  */
-export async function cdcLoad(rows: StockSnapshotRow[]): Promise<LoadResult> {
+export async function cdcLoad(
+  rows: StockSnapshotRow[],
+  target: StockLoadTarget = DEFAULT_TARGET,
+): Promise<LoadResult> {
   const t0 = Date.now();
   if (rows.length === 0) return { inserted: 0, updated: 0, skipped: 0, durationMs: 0 };
 
@@ -68,7 +96,7 @@ export async function cdcLoad(rows: StockSnapshotRow[]): Promise<LoadResult> {
 
   const existingKeys = new Set<string>();
   for (const part of chunk(deduped, FIND_EXISTING_CHUNK)) {
-    const found = await prisma.stockSnapshot.findMany({
+    const found = await target.delegate.findMany({
       where: {
         OR: part.map((r) => ({
           productCode: r.productCode,
@@ -117,7 +145,7 @@ export async function cdcLoad(rows: StockSnapshotRow[]): Promise<LoadResult> {
     }
 
     const sql =
-      `INSERT INTO "StockSnapshot" (${INSERT_COLUMNS}) VALUES ${tuples.join(", ")} ` +
+      `INSERT INTO "${target.tableName}" (${INSERT_COLUMNS}) VALUES ${tuples.join(", ")} ` +
       `ON CONFLICT ("productCode", "warehouseCode") DO UPDATE SET ${UPDATE_ASSIGNMENTS}`;
 
     await prisma.$executeRawUnsafe(sql, ...params);
@@ -126,7 +154,7 @@ export async function cdcLoad(rows: StockSnapshotRow[]): Promise<LoadResult> {
   const skipped = rows.length - deduped.length;
   const durationMs = Date.now() - t0;
   console.log(
-    `[load] mode=cdc inserted=${inserted} updated=${updated} skipped=${skipped} durationMs=${durationMs}`,
+    `[load] table=${target.tableName} inserted=${inserted} updated=${updated} skipped=${skipped} durationMs=${durationMs}`,
   );
   return { inserted, updated, skipped, durationMs };
 }

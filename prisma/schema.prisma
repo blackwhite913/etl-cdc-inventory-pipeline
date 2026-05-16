@@ -43,6 +43,35 @@ model StockSnapshot {
   @@index([lastModified])
 }
 
+// 3PL stock-on-hand for the CW Logistics warehouse (CWL_001). Kept in its own
+// table so the 2-minute U10/U3 stock ETL's CDC cursor — MAX(lastModified) over
+// StockSnapshot — is never polluted by CW's once-a-day refresh.
+model CwStockSnapshot {
+  productCode       String
+  warehouseCode     String
+
+  description       String?
+  productGroup      String?
+
+  qtyOnHand         Int
+  allocatedQty      Int
+  availableQty      Int
+  onPurchase        Int
+
+  avgCost           Float?
+  totalCost         Float?
+
+  daysSinceLastSale Int?
+
+  lastModified      DateTime?
+  snapshotAt        DateTime  @default(now())
+
+  @@id([productCode, warehouseCode])
+  @@index([productCode])
+  @@index([warehouseCode])
+  @@index([lastModified])
+}
+
 model EtlRun {
   id                     String    @id @default(cuid())
   startedAt              DateTime  @default(now())

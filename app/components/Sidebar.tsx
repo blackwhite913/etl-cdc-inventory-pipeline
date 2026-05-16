@@ -15,6 +15,7 @@ type NavSection = {
 
 const primaryItems: NavItem[] = [
   { label: "Stock On Hand", href: "/extraction" },
+  { label: "CW Logistics", href: "/cw-logistics" },
   { label: "BOM", href: "/bom" },
   { label: "Shopify", href: "/shopify" },
 ];

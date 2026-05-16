@@ -75,6 +75,17 @@ export async function GET(request: Request) {
                       AND table_name IN ('ReplenishmentRow', 'SkuPoIndex', 'EtlMetadata', 'DatasetStatus')
                     ORDER BY table_name, ordinal_position
                   `
+                : tables === "cw"
+                  ? await prisma.$queryRaw<ColumnRow[]>`
+                      SELECT
+                        table_name,
+                        column_name,
+                        data_type
+                      FROM information_schema.columns
+                      WHERE table_schema = 'public'
+                        AND table_name IN ('CwStockSnapshot', 'DatasetStatus')
+                      ORDER BY table_name, ordinal_position
+                    `
         : await prisma.$queryRaw<ColumnRow[]>`
             SELECT
               table_name,

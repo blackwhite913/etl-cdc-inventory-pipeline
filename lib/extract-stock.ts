@@ -35,6 +35,11 @@ export type ExtractOptions = {
   modifiedSince?: Date;
   batchSize?: number;
   /**
+   * Warehouse codes to fetch. Defaults to the U10/U3 stock warehouses; the CW
+   * Logistics (3PL) ETL passes its own warehouse codes here.
+   */
+  warehouseCodes?: readonly string[];
+  /**
    * Streaming hook. When provided, each completed page batch is awaited then
    * passed here, and `rawItems` in the returned result stays empty so memory
    * is bounded to a single batch. Use this for full-load to avoid holding the
@@ -58,6 +63,8 @@ type PageFailure = {
 export async function extractAllStock(options: ExtractOptions = {}): Promise<ExtractResult> {
   const startedAt = Date.now();
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
+  const warehouseCodes = options.warehouseCodes ?? TARGET_WAREHOUSE_CODES;
+  const warehouseSet = new Set<string>(warehouseCodes);
   const modifiedSince = options.modifiedSince
     ? formatUnleashedModifiedSince(options.modifiedSince)
     : undefined;
@@ -79,7 +86,7 @@ export async function extractAllStock(options: ExtractOptions = {}): Promise<Ext
       totalRawFetched += rawItems.length;
       totalPagesFetched += 1;
 
-      const filtered = filterStockToTargetWarehouses(rawItems);
+      const filtered = filterStockToTargetWarehouses(rawItems, warehouseSet);
       totalAfterFilter += filtered.length;
       for (const item of filtered) {
         const code = String(item.WarehouseCode ?? "").trim();
@@ -100,7 +107,7 @@ export async function extractAllStock(options: ExtractOptions = {}): Promise<Ext
   };
 
   const firstPagesResults = await Promise.all(
-    TARGET_WAREHOUSE_CODES.map(async (warehouseCode) => {
+    warehouseCodes.map(async (warehouseCode) => {
       try {
         const response = await fetchStockOnHandPage(1, {
           warehouseCode,
@@ -157,7 +164,7 @@ export async function extractAllStock(options: ExtractOptions = {}): Promise<Ext
   for (let pageStart = 2; pageStart <= maxPages; pageStart += batchSize) {
     const batchPromises: Promise<PageSuccess | PageFailure>[] = [];
 
-    for (const warehouseCode of TARGET_WAREHOUSE_CODES) {
+    for (const warehouseCode of warehouseCodes) {
       const warehousePages = warehouseTotalPages.get(warehouseCode) ?? 0;
       for (let i = 0; i < batchSize; i += 1) {
         const page = pageStart + i;
@@ -196,7 +203,7 @@ export async function extractAllStock(options: ExtractOptions = {}): Promise<Ext
   const finishedAt = Date.now();
 
   console.log(
-    `[extract] done warehouses=${TARGET_WAREHOUSE_CODES.join(",")} pages=${totalPagesFetched} rows=${totalAfterFilter} partialFailures=${partialFailures} ms=${finishedAt - startedAt}`,
+    `[extract] done warehouses=${warehouseCodes.join(",")} pages=${totalPagesFetched} rows=${totalAfterFilter} partialFailures=${partialFailures} ms=${finishedAt - startedAt}`,
   );
 
   return {
