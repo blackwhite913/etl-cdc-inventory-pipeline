@@ -389,7 +389,7 @@ export async function refreshShopifySales(): Promise<ShopifySalesRefreshResult> 
         AND LOWER(COALESCE(soi."title", '')) NOT LIKE '%personalisation%'
       GROUP BY soi."sku"
     `);
-  });
+  }, { timeout: 60_000, maxWait: 10_000 });
 
   const rowCountRows = await prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
     SELECT COUNT(*)::int AS total
@@ -558,7 +558,7 @@ export async function refreshOosRisk(): Promise<OosRiskRefreshResult> {
       JOIN abc_classed ac ON ac.sku = b.sku
       JOIN norm n ON n.sku = b.sku
     `);
-  });
+  }, { timeout: 60_000, maxWait: 10_000 });
 
   const rowCountRows = await prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
     SELECT COUNT(*)::int AS total FROM "OosRiskRow"

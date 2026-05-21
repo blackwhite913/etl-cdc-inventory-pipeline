@@ -652,7 +652,7 @@ export async function refreshReplenishment(): Promise<ReplenishmentRefreshResult
         });
       }
     }
-  });
+  }, { timeout: 30_000, maxWait: 10_000 });
 
   const rowCount = replenishment.length;
   const reorderCount = replenishment.filter((r) => r.needsReorder).length;

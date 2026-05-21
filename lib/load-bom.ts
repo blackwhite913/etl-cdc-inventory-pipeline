@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 
-const BOM_TRANSACTION_BATCH = 20;
+const BOM_TRANSACTION_BATCH = 5;
+const TRANSACTION_OPTIONS = { timeout: 30_000, maxWait: 10_000 };
 
 type BomHeaderInput = {
   billNumber: string;
@@ -199,7 +200,7 @@ export async function loadBomBatch(rawItems: Record<string, unknown>[]): Promise
           lineRowsInserted += validLines.length;
         }
       }
-    });
+    }, TRANSACTION_OPTIONS);
   }
 
   const inserted = normalized.filter((entry) => !existingSet.has(entry.header.billNumber)).length;
